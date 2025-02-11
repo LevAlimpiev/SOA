@@ -25,3 +25,4 @@ yarn-error.log*
 postcss.config.js
 package.json
 .likec4rc
+package-lock.json
