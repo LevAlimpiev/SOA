@@ -1,0 +1,87 @@
+specification {
+  element actor {
+    style {
+      shape person
+    }
+  }
+  element system
+  element container
+  element database {
+    style {
+      shape cylinder
+    }
+  }
+}
+
+model {
+  user = actor "User" {
+    description "Пользователь социальной сети"
+    -> socialNetwork "Использует для публикации постов, комментариев и просмотра контента"
+  }
+
+  socialNetwork = system "Social Network" {
+    description "Система социальной сети"
+
+    apiGateway = container "API Gateway" {
+      description "Обрабатывает все входящие запросы"
+      technology "REST API"
+    }
+
+    userService = container "User Service" {
+      description "Управляет пользователями и аутентификацией"
+      technology "Go"
+    }
+
+    userDb = database "User Database" {
+      description "Хранит данные пользователей"
+      technology "PostgreSQL"
+    }
+
+    statisticsService = container "Statistics Service" {
+      description "Обрабатывает статистику просмотров и лайков"
+      technology "Go"
+    }
+
+    statsDb = database "Statistics Database" {
+      description "Хранит статистику"
+      technology "ClickHouse"
+    }
+
+    postService = container "Post Service" {
+      description "Управляет постами и комментариями"
+      technology "Go"
+    }
+
+    postDb = database "Post Database" {
+      description "Хранит посты и комментарии"
+      technology "PostgreSQL"
+    }
+
+    messageBroker = container "Message Broker" {
+      description "Брокер сообщений для асинхронной коммуникации"
+      technology "RabbitMQ"
+    }
+
+    apiGateway -> userService "REST API"
+    apiGateway -> postService "REST API"
+    apiGateway -> statisticsService "REST API"
+
+    userService -> userDb "SQL"
+    postService -> postDb "SQL"
+    statisticsService -> statsDb "SQL"
+
+    postService -> messageBroker "Публикует события"
+    messageBroker -> statisticsService "Потребляет события"
+  }
+}
+
+views {
+  view index {
+    include *
+  }
+
+  view of socialNetwork {
+    include *
+  }
+}
+
