@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+*/doc/site/
+*/doc/diagrams/
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Config files
+
+postcss.config.js
+package.json
+.likec4rc
+package-lock.json
