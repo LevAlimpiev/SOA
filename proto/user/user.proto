@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package user;
+
+option go_package = "github.com/levalimpiev/service_oriented_architectures/proto/user";
+
+import "google/protobuf/timestamp.proto";
+
+// The User service definition
+service UserService {
+  // Register creates a new user
+  rpc Register(RegisterRequest) returns (AuthResponse) {}
+
+  // Login authenticates a user
+  rpc Login(LoginRequest) returns (AuthResponse) {}
+}
+
+// Request message for registering a new user
+message RegisterRequest {
+  string username = 1;
+  string email = 2;
+  string password = 3;
+}
+
+// Request message for logging in
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+// User details
+message User {
+  int32 id = 1;
+  string username = 2;
+  string email = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+// Response including auth token and user info
+message AuthResponse {
+  string token = 1;
+  User user = 2;
+}
