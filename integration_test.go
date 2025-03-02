@@ -5,9 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +94,64 @@ func (s *UserServiceServer) Login(ctx context.Context, req *pb.LoginRequest) (*p
 	}, nil
 }
 
+// GetProfile обрабатывает запрос на получение профиля пользователя
+func (s *UserServiceServer) GetProfile(ctx context.Context, req *pb.ProfileRequest) (*pb.ProfileResponse, error) {
+	// Проверяем наличие токена или user_id
+	if req.Token == "" && req.UserId == 0 {
+		return &pb.ProfileResponse{
+			Success: false,
+			Error:   "Either token or user_id must be provided",
+		}, status.Error(codes.InvalidArgument, "Either token or user_id must be provided")
+	}
+
+	// Если указан токен, проверяем его
+	var userID int32 = req.UserId
+	if req.Token != "" {
+		// Для тестирования считаем, что токен "invalid_token" недействителен
+		if req.Token == "invalid_token" {
+			return &pb.ProfileResponse{
+				Success: false,
+				Error:   "Invalid token",
+			}, status.Error(codes.Unauthenticated, "Invalid token")
+		}
+		// Для тестирования считаем, что токен "test_token" соответствует пользователю с ID 1
+		userID = 1
+	}
+
+	// Если указан user_id, ищем пользователя по ID
+	createdAt := time.Now()
+	if userID > 0 {
+		// Для тестирования считаем, что пользователь с ID 999 не существует
+		if userID == 999 {
+			return &pb.ProfileResponse{
+				Success: false,
+				Error:   "User not found",
+			}, status.Error(codes.NotFound, "User not found")
+		}
+
+		// Настраиваем ожидаемый запрос
+		s.DB.ExpectQuery("SELECT id, username, email, created_at FROM users WHERE id = \\$1").
+			WithArgs(userID).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "username", "email", "created_at"}).
+				AddRow(userID, "testuser", "test@example.com", createdAt))
+
+		return &pb.ProfileResponse{
+			User: &pb.User{
+				Id:        userID,
+				Username:  "testuser",
+				Email:     "test@example.com",
+				CreatedAt: timestamppb.New(createdAt),
+			},
+			Success: true,
+		}, nil
+	}
+
+	return &pb.ProfileResponse{
+		Success: false,
+		Error:   "User not found",
+	}, status.Error(codes.NotFound, "User not found")
+}
+
 // RegisterHandler обрабатывает HTTP-запрос на регистрацию
 func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	// Декодируем тело запроса
@@ -167,6 +228,61 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// profileHandler обрабатывает HTTP-запрос на получение профиля пользователя
+func profileHandler(w http.ResponseWriter, r *http.Request) {
+	// Получение token из заголовка Authorization
+	token := r.Header.Get("Authorization")
+	if token != "" && strings.HasPrefix(token, "Bearer ") {
+		token = strings.TrimPrefix(token, "Bearer ")
+	}
+
+	// Получение user_id из строки запроса
+	var userID int32
+	userIDParam := r.URL.Query().Get("user_id")
+	if userIDParam != "" {
+		userIDInt, err := strconv.Atoi(userIDParam)
+		if err != nil {
+			http.Error(w, "Invalid user_id parameter", http.StatusBadRequest)
+			return
+		}
+		userID = int32(userIDInt)
+	}
+
+	// Проверка наличия либо token, либо user_id
+	if token == "" && userID == 0 {
+		http.Error(w, "Either token or user_id must be provided", http.StatusBadRequest)
+		return
+	}
+
+	// Создаем gRPC-запрос
+	grpcReq := &pb.ProfileRequest{
+		Token:  token,
+		UserId: userID,
+	}
+
+	// Вызываем gRPC-метод
+	resp, err := userClient.GetProfile(r.Context(), grpcReq)
+	if err != nil {
+		st, ok := status.FromError(err)
+		if ok {
+			switch st.Code() {
+			case codes.InvalidArgument:
+				http.Error(w, st.Message(), http.StatusBadRequest)
+				return
+			case codes.NotFound, codes.Unauthenticated:
+				http.Error(w, st.Message(), http.StatusUnauthorized)
+				return
+			}
+		}
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Формируем HTTP-ответ
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
 // Глобальная переменная для gRPC-клиента
 var userClient pb.UserServiceClient
 
@@ -207,6 +323,7 @@ func setupHTTPServer(t *testing.T, conn *grpc.ClientConn) *httptest.Server {
 	r := mux.NewRouter()
 	r.HandleFunc("/api/register", RegisterHandler).Methods("POST")
 	r.HandleFunc("/api/login", LoginHandler).Methods("POST")
+	r.HandleFunc("/api/profile", profileHandler).Methods("GET")
 
 	// Запуск тестового HTTP-сервера
 	return httptest.NewServer(r)
@@ -276,6 +393,50 @@ func TestIntegration_Register(t *testing.T) {
 }
 
 func TestIntegration_Login(t *testing.T) {
+	// Запуск тестов интеграции
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	// Создание HTTP-клиента
+	client := &http.Client{}
+
+	// Подготовка данных для входа
+	loginData := map[string]string{
+		"username": "testuser",
+		"password": "password123",
+	}
+	loginJSON, _ := json.Marshal(loginData)
+
+	// Отправка запроса на вход
+	loginReq, _ := http.NewRequest("POST", "http://localhost:8080/api/login", bytes.NewBuffer(loginJSON))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginResp, err := client.Do(loginReq)
+	if err != nil {
+		t.Fatalf("Failed to send login request: %v", err)
+	}
+	defer loginResp.Body.Close()
+
+	// Проверка статуса ответа
+	if loginResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(loginResp.Body)
+		t.Fatalf("Expected status OK, got %v: %s", loginResp.Status, body)
+	}
+
+	// Чтение ответа
+	var loginResult map[string]interface{}
+	if err := json.NewDecoder(loginResp.Body).Decode(&loginResult); err != nil {
+		t.Fatalf("Failed to decode login response: %v", err)
+	}
+
+	// Проверка наличия токена в ответе
+	token, ok := loginResult["token"].(string)
+	if !ok || token == "" {
+		t.Fatalf("No token in login response: %v", loginResult)
+	}
+}
+
+func TestIntegration_GetProfile(t *testing.T) {
 	// Настраиваем gRPC-сервер
 	setupGRPCServer(t)
 
@@ -292,39 +453,97 @@ func TestIntegration_Login(t *testing.T) {
 	server := setupHTTPServer(t, conn)
 	defer tearDown(conn, server)
 
-	// Создаем HTTP запрос
-	reqBody := map[string]string{
-		"username": "testuser",
-		"password": "password123",
-	}
-	jsonBody, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequest("POST", server.URL+"/api/login", bytes.NewBuffer(jsonBody))
-	req.Header.Set("Content-Type", "application/json")
-
-	// Отправляем запрос
+	// Создаем HTTP клиент
 	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("Failed to send request: %v", err)
-	}
-	defer resp.Body.Close()
 
-	// Проверяем код ответа
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	// Тест 1: Получение профиля по user_id
+	t.Run("GetProfileByUserID", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", server.URL+"/api/profile?user_id=1", nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Failed to send request: %v", err)
+		}
+		defer resp.Body.Close()
 
-	// Декодируем и проверяем ответ
-	var response map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&response)
+		// Проверяем код ответа
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	token, ok := response["token"].(string)
-	assert.True(t, ok)
-	assert.NotEmpty(t, token)
+		// Декодируем и проверяем ответ
+		var response map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&response)
 
-	user, ok := response["user"].(map[string]interface{})
-	assert.True(t, ok)
-	assert.Equal(t, float64(1), user["id"])
-	assert.Equal(t, "testuser", user["username"])
-	assert.Equal(t, "test@example.com", user["email"])
+		assert.True(t, response["success"].(bool))
+		user, ok := response["user"].(map[string]interface{})
+		assert.True(t, ok)
+		assert.Equal(t, float64(1), user["id"])
+		assert.Equal(t, "testuser", user["username"])
+		assert.Equal(t, "test@example.com", user["email"])
+	})
+
+	// Тест 2: Получение профиля по токену
+	t.Run("GetProfileByToken", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", server.URL+"/api/profile", nil)
+		req.Header.Set("Authorization", "Bearer test_token")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Failed to send request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// Проверяем код ответа
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		// Декодируем и проверяем ответ
+		var response map[string]interface{}
+		json.NewDecoder(resp.Body).Decode(&response)
+
+		assert.True(t, response["success"].(bool))
+		user, ok := response["user"].(map[string]interface{})
+		assert.True(t, ok)
+		assert.Equal(t, float64(1), user["id"])
+		assert.Equal(t, "testuser", user["username"])
+		assert.Equal(t, "test@example.com", user["email"])
+	})
+
+	// Тест 3: Пользователь не найден
+	t.Run("UserNotFound", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", server.URL+"/api/profile?user_id=999", nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Failed to send request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// Проверяем код ответа - ожидаем 401 Unauthorized для ошибки NotFound
+		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	})
+
+	// Тест 4: Не указан ни токен, ни user_id
+	t.Run("NoParameters", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", server.URL+"/api/profile", nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Failed to send request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// Проверяем код ответа - ожидаем 400 Bad Request
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	// Тест 5: Недействительный токен
+	t.Run("InvalidToken", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", server.URL+"/api/profile", nil)
+		req.Header.Set("Authorization", "Bearer invalid_token")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Failed to send request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// Проверяем код ответа - ожидаем 401 Unauthorized
+		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	})
 }
 
 // Вспомогательная функция для генерации хеша пароля

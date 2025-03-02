@@ -13,6 +13,9 @@ service UserService {
 
   // Login authenticates a user
   rpc Login(LoginRequest) returns (AuthResponse) {}
+
+  // GetProfile returns all user profile data
+  rpc GetProfile(ProfileRequest) returns (ProfileResponse) {}
 }
 
 // Request message for registering a new user
@@ -20,6 +23,10 @@ message RegisterRequest {
   string username = 1;
   string email = 2;
   string password = 3;
+  string first_name = 4;
+  string last_name = 5;
+  google.protobuf.Timestamp birth_date = 6;
+  string phone_number = 7;
 }
 
 // Request message for logging in
@@ -28,16 +35,34 @@ message LoginRequest {
   string password = 2;
 }
 
+// Request for getting profile data
+message ProfileRequest {
+  string token = 1;
+  int32 user_id = 2;
+}
+
 // User details
 message User {
   int32 id = 1;
   string username = 2;
   string email = 3;
   google.protobuf.Timestamp created_at = 4;
+  string first_name = 5;
+  string last_name = 6;
+  google.protobuf.Timestamp birth_date = 7;
+  string phone_number = 8;
+  google.protobuf.Timestamp updated_at = 9;
 }
 
 // Response including auth token and user info
 message AuthResponse {
   string token = 1;
   User user = 2;
+}
+
+// Response with full profile data
+message ProfileResponse {
+  User user = 1;
+  bool success = 2;
+  string error = 3;
 }

@@ -2,53 +2,40 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"strconv"
 	"time"
 
-	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/levalimpiev/service_oriented_architectures/user-service/token"
 )
 
 // User struct for user data
 type User struct {
-	ID        int       `json:"id"`
-	Username  string    `json:"username"`
-	Email     string    `json:"email"`
-	Password  string    `json:"-"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-// Auth response structure
-type AuthResponse struct {
-	Token string `json:"token"`
-	User  User   `json:"user"`
-}
-
-// Error response
-type ErrorResponse struct {
-	Error string `json:"error"`
+	ID          int       `json:"id"`
+	Username    string    `json:"username"`
+	Email       string    `json:"email"`
+	Password    string    `json:"-"`
+	FirstName   string    `json:"first_name,omitempty"`
+	LastName    string    `json:"last_name,omitempty"`
+	BirthDate   time.Time `json:"birth_date,omitempty"`
+	PhoneNumber string    `json:"phone_number,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`
 }
 
 // App структура для хранения зависимостей приложения
 type App struct {
 	db           *sql.DB
 	tokenService token.TokenService
-	router       *mux.Router
 }
 
 // NewApp создает и инициализирует новое приложение
 func NewApp() (*App, error) {
-	app := &App{
-		router: mux.NewRouter(),
-	}
+	app := &App{}
 
 	// Инициализация базы данных
 	db, err := app.initDB()
@@ -59,9 +46,6 @@ func NewApp() (*App, error) {
 
 	// Инициализация сервиса токенов
 	app.tokenService = app.initTokenService()
-
-	// Настройка маршрутов
-	app.setupRoutes()
 
 	return app, nil
 }
@@ -115,179 +99,11 @@ func (a *App) initTokenService() token.TokenService {
 	return token.NewSimpleTokenService(expirationHours)
 }
 
-// setupRoutes настраивает HTTP маршруты
-func (a *App) setupRoutes() {
-	// Публичные маршруты
-	a.router.HandleFunc("/register", a.registerHandler).Methods("POST")
-	a.router.HandleFunc("/login", a.loginHandler).Methods("POST")
-}
-
-// registerHandler обрабатывает регистрацию пользователя
-func (a *App) registerHandler(w http.ResponseWriter, r *http.Request) {
-	// Парсинг JSON из тела запроса
-	var user User
-	err := json.NewDecoder(r.Body).Decode(&user)
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Invalid request payload")
-		return
-	}
-	defer r.Body.Close()
-
-	// Валидация входных данных
-	if user.Username == "" || user.Email == "" || user.Password == "" {
-		respondWithError(w, http.StatusBadRequest, "All fields are required")
-		return
-	}
-
-	// Проверка, существует ли пользователь
-	var exists bool
-	err = a.db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE username = $1 OR email = $2)",
-		user.Username, user.Email).Scan(&exists)
-	if err != nil {
-		log.Printf("Error checking user existence: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "Failed to check user existence")
-		return
-	}
-
-	if exists {
-		respondWithError(w, http.StatusConflict, "User with this username or email already exists")
-		return
-	}
-
-	// Хеширование пароля
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
-	if err != nil {
-		log.Printf("Error hashing password: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "Failed to process password")
-		return
-	}
-
-	// Создание пользователя
-	var userID int
-	var username, email string
-	var createdAt time.Time
-
-	err = a.db.QueryRow(
-		"INSERT INTO users (username, email, password, created_at) VALUES ($1, $2, $3, $4) RETURNING id, username, email, created_at",
-		user.Username, user.Email, string(hashedPassword), time.Now(),
-	).Scan(&userID, &username, &email, &createdAt)
-
-	if err != nil {
-		log.Printf("Error saving user: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "Failed to create user")
-		return
-	}
-
-	// Генерация токена
-	tokenString, err := a.tokenService.GenerateToken(userID, username, email)
-	if err != nil {
-		log.Printf("Error generating token: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "Failed to generate token")
-		return
-	}
-
-	// Формирование и отправка ответа
-	response := AuthResponse{
-		Token: tokenString,
-		User: User{
-			ID:        userID,
-			Username:  username,
-			Email:     email,
-			CreatedAt: createdAt,
-		},
-	}
-
-	respondWithJSON(w, http.StatusCreated, response)
-}
-
-// loginHandler обрабатывает авторизацию пользователя
-func (a *App) loginHandler(w http.ResponseWriter, r *http.Request) {
-	// Парсинг JSON из тела запроса
-	var credentials struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	err := json.NewDecoder(r.Body).Decode(&credentials)
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Invalid request payload")
-		return
-	}
-	defer r.Body.Close()
-
-	// Валидация входных данных
-	if credentials.Username == "" || credentials.Password == "" {
-		respondWithError(w, http.StatusBadRequest, "Username and password are required")
-		return
-	}
-
-	// Поиск пользователя
-	var user User
-	err = a.db.QueryRow(
-		"SELECT id, username, email, password, created_at FROM users WHERE username = $1",
-		credentials.Username,
-	).Scan(&user.ID, &user.Username, &user.Email, &user.Password, &user.CreatedAt)
-
-	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, "Invalid username or password")
-		return
-	}
-
-	// Проверка пароля
-	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(credentials.Password))
-	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, "Invalid username or password")
-		return
-	}
-
-	// Генерация токена
-	tokenString, err := a.tokenService.GenerateToken(user.ID, user.Username, user.Email)
-	if err != nil {
-		log.Printf("Error generating token: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "Failed to generate token")
-		return
-	}
-
-	// Формирование и отправка ответа
-	response := AuthResponse{
-		Token: tokenString,
-		User: User{
-			ID:        user.ID,
-			Username:  user.Username,
-			Email:     user.Email,
-			CreatedAt: user.CreatedAt,
-		},
-	}
-
-	respondWithJSON(w, http.StatusOK, response)
-}
-
-// Run запускает HTTP и gRPC серверы
+// Run запускает gRPC сервер
 func (a *App) Run() {
-	// Запуск gRPC сервера в отдельной горутине
-	go startGRPCServer(getEnv("GRPC_PORT", "50051"), a.db, a.tokenService)
-
-	// Запуск HTTP сервера
-	httpPort := getEnv("HTTP_PORT", "8081")
-	log.Printf("HTTP server started on port %s", httpPort)
-	log.Fatal(http.ListenAndServe(":"+httpPort, a.router))
-}
-
-// respondWithError отправляет JSON-ответ с ошибкой
-func respondWithError(w http.ResponseWriter, code int, message string) {
-	respondWithJSON(w, code, ErrorResponse{Error: message})
-}
-
-// respondWithJSON отправляет JSON-ответ
-func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
-	response, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("Error marshaling JSON: %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	w.Write(response)
+	// Запуск gRPC сервера
+	grpcPort := getEnv("GRPC_PORT", "50051")
+	startGRPCServer(grpcPort, a.db, a.tokenService)
 }
 
 // getEnv возвращает значение переменной окружения или значение по умолчанию

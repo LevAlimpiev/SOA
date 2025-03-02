@@ -41,6 +41,15 @@ func (m *MockUserClient) Login(ctx context.Context, in *pb.LoginRequest, opts ..
 	return args.Get(0).(*pb.AuthResponse), args.Error(1)
 }
 
+// Реализация метода GetProfile для MockUserClient
+func (m *MockUserClient) GetProfile(ctx context.Context, in *pb.ProfileRequest, opts ...grpc.CallOption) (*pb.ProfileResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*pb.ProfileResponse), args.Error(1)
+}
+
 // Настройка тестового окружения
 func setupTestAPI(t *testing.T) (*MockUserClient, *mux.Router) {
 	mockClient := new(MockUserClient)
@@ -49,6 +58,7 @@ func setupTestAPI(t *testing.T) (*MockUserClient, *mux.Router) {
 	r := mux.NewRouter()
 	r.HandleFunc("/api/register", registerHandler).Methods("POST")
 	r.HandleFunc("/api/login", loginHandler).Methods("POST")
+	r.HandleFunc("/api/profile", profileHandler).Methods("GET")
 
 	return mockClient, r
 }
@@ -242,4 +252,134 @@ func TestInvalidRequestBody(t *testing.T) {
 
 	// Проверяем текст ошибки
 	assert.Contains(t, rr.Body.String(), "Invalid request")
+}
+
+func TestProfileHandlerAPI_ByUserID(t *testing.T) {
+	// Настройка API для тестирования
+	_, router := setupTestAPI(t)
+
+	// Создание запроса только с user_id (без токена)
+	req := httptest.NewRequest("GET", "/api/profile?user_id=1", nil)
+	resp := httptest.NewRecorder()
+
+	// Выполнение запроса
+	router.ServeHTTP(resp, req)
+
+	// Проверка результата - должен быть отказ в доступе
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+	// Проверяем текст ошибки
+	assert.Contains(t, resp.Body.String(), "Authorization token required")
+}
+
+func TestProfileHandlerAPI_ByToken(t *testing.T) {
+	// Настройка API для тестирования
+	mockClient, router := setupTestAPI(t)
+
+	// Подготовка данных для тестирования
+	testUser := &pb.User{
+		Id:       1,
+		Username: "testuser",
+		Email:    "test@example.com",
+	}
+
+	// Настройка ожидаемого ответа от mock сервиса
+	mockResponse := &pb.ProfileResponse{
+		User:    testUser,
+		Success: true,
+		Error:   "",
+	}
+
+	// JWT токен для тестирования
+	testToken := "test.jwt.token"
+
+	// Настройка mock для метода GetProfile
+	mockClient.On("GetProfile", mock.Anything, mock.MatchedBy(func(req *pb.ProfileRequest) bool {
+		return req.Token == testToken && req.UserId == 0
+	})).Return(mockResponse, nil)
+
+	// Создание запроса с token в заголовке
+	req := httptest.NewRequest("GET", "/api/profile", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp := httptest.NewRecorder()
+
+	// Выполнение запроса
+	router.ServeHTTP(resp, req)
+
+	// Проверка результата
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	// Проверка возвращаемых данных
+	var response pb.ProfileResponse
+	err := json.Unmarshal(resp.Body.Bytes(), &response)
+	assert.NoError(t, err)
+	assert.Equal(t, testUser.Id, response.User.Id)
+	assert.Equal(t, testUser.Username, response.User.Username)
+	assert.Equal(t, testUser.Email, response.User.Email)
+	assert.True(t, response.Success)
+	assert.Empty(t, response.Error)
+
+	// Проверка, что mock метод был вызван
+	mockClient.AssertExpectations(t)
+}
+
+func TestProfileHandlerAPI_UserNotFound(t *testing.T) {
+	// Настройка API для тестирования
+	mockClient, router := setupTestAPI(t)
+
+	// JWT токен для тестирования
+	testToken := "invalid.jwt.token"
+
+	// Настройка ответа с ошибкой "пользователь не найден"
+	mockError := status.Error(codes.NotFound, "User not found")
+
+	// Настройка mock для метода GetProfile
+	mockClient.On("GetProfile", mock.Anything, mock.MatchedBy(func(req *pb.ProfileRequest) bool {
+		return req.Token == testToken
+	})).Return(nil, mockError)
+
+	// Создание запроса с токеном
+	req := httptest.NewRequest("GET", "/api/profile", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp := httptest.NewRecorder()
+
+	// Выполнение запроса
+	router.ServeHTTP(resp, req)
+
+	// Проверка результата - ожидаем 404 Not Found для ошибки NotFound
+	assert.Equal(t, http.StatusNotFound, resp.Code)
+
+	// Проверка, что mock метод был вызван
+	mockClient.AssertExpectations(t)
+}
+
+func TestProfileHandlerAPI_NoParameters(t *testing.T) {
+	// Настройка API для тестирования
+	_, router := setupTestAPI(t)
+
+	// Создание запроса без параметров
+	req := httptest.NewRequest("GET", "/api/profile", nil)
+	resp := httptest.NewRecorder()
+
+	// Выполнение запроса
+	router.ServeHTTP(resp, req)
+
+	// Проверка результата - ожидаем ошибку "Authorization token required"
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+	assert.Contains(t, resp.Body.String(), "Authorization token required")
+}
+
+func TestProfileHandlerAPI_InvalidUserID(t *testing.T) {
+	// Настройка API для тестирования
+	_, router := setupTestAPI(t)
+
+	// Создание запроса с некорректным user_id (без токена)
+	req := httptest.NewRequest("GET", "/api/profile?user_id=abc", nil)
+	resp := httptest.NewRecorder()
+
+	// Выполнение запроса
+	router.ServeHTTP(resp, req)
+
+	// Проверка результата - ожидаем ошибку "Authorization token required"
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+	assert.Contains(t, resp.Body.String(), "Authorization token required")
 }

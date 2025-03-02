@@ -33,9 +33,8 @@ func main() {
 	// Создание маршрутизатора
 	r := mux.NewRouter()
 
-	// Определение публичных маршрутов
-	r.HandleFunc("/api/register", registerHandler).Methods("POST")
-	r.HandleFunc("/api/login", loginHandler).Methods("POST")
+	// Настройка маршрутов
+	setupRoutes(r)
 
 	// Запуск сервера
 	port := getEnv("PORT", "8080")
@@ -133,6 +132,33 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// Обработчик для получения профиля пользователя
+func profileHandler(w http.ResponseWriter, r *http.Request) {
+	// Получение token из заголовка Authorization
+	token := r.Header.Get("Authorization")
+	if token == "" || !strings.HasPrefix(token, "Bearer ") {
+		http.Error(w, "Authorization token required", http.StatusUnauthorized)
+		return
+	}
+	token = strings.TrimPrefix(token, "Bearer ")
+
+	// Запрещаем доступ по user_id, игнорируем этот параметр
+	// Установка таймаута для gRPC запроса
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Вызов gRPC метода только с токеном
+	resp, err := GetUserProfile(ctx, token, 0)
+	if err != nil {
+		handleGRPCError(w, err)
+		return
+	}
+
+	// Формирование JSON-ответа
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
 // Вспомогательная функция для получения значений из переменных окружения
 func getEnv(key, fallback string) string {
 	if value, exists := os.LookupEnv(key); exists {
@@ -152,10 +178,14 @@ func handleGRPCError(w http.ResponseWriter, err error) {
 	switch st.Code() {
 	case codes.InvalidArgument:
 		http.Error(w, st.Message(), http.StatusBadRequest)
+	case codes.NotFound:
+		http.Error(w, st.Message(), http.StatusNotFound)
 	case codes.AlreadyExists:
 		http.Error(w, st.Message(), http.StatusConflict)
-	case codes.NotFound, codes.Unauthenticated:
+	case codes.Unauthenticated:
 		http.Error(w, st.Message(), http.StatusUnauthorized)
+	case codes.PermissionDenied:
+		http.Error(w, st.Message(), http.StatusForbidden)
 	default:
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
@@ -165,4 +195,5 @@ func handleGRPCError(w http.ResponseWriter, err error) {
 func setupRoutes(router *mux.Router) {
 	router.HandleFunc("/api/register", registerHandler).Methods("POST")
 	router.HandleFunc("/api/login", loginHandler).Methods("POST")
+	router.HandleFunc("/api/profile", profileHandler).Methods("GET")
 }

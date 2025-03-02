@@ -35,12 +35,10 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: user_service
-      PORT: 8081
       GRPC_PORT: 50051
       TOKEN_TYPE: ${TOKEN_TYPE:-simple}
       JWT_SECRET: ${JWT_SECRET:-your-secret-key-here}
     ports:
-      - "8081:8081"
       - "50051:50051"
     networks:
       - app-network

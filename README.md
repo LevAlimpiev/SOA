@@ -106,4 +106,3 @@ JWT токен содержит:
 ```bash
 # Через docker-compose
 ./docker_compose_test.sh
-```

@@ -65,3 +65,11 @@ func LoginUser(ctx context.Context, username, password string) (*pb.AuthResponse
 	}
 	return userClient.Login(ctx, req)
 }
+
+// GetUserProfile calls the GetProfile RPC
+func GetUserProfile(ctx context.Context, token string, userID int32) (*pb.ProfileResponse, error) {
+	req := &pb.ProfileRequest{
+		Token: token,
+	}
+	return userClient.GetProfile(ctx, req)
+}
