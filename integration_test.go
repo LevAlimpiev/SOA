@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -41,14 +43,14 @@ type UserServiceServer struct {
 	DB sqlmock.Sqlmock
 }
 
-// Register обрабатывает запрос на регистрацию пользователя
+// Register handles user registration request
 func (s *UserServiceServer) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.AuthResponse, error) {
-	// Проверяем, существует ли пользователь
+	// Check if user exists
 	s.DB.ExpectQuery("SELECT EXISTS").
 		WithArgs(req.Username, req.Email).
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 
-	// Возвращаем успешный результат регистрации
+	// Return successful registration result
 	createdAt := time.Now()
 	s.DB.ExpectQuery("INSERT INTO users").
 		WithArgs(req.Username, req.Email, sqlmock.AnyArg(), sqlmock.AnyArg()).
@@ -66,19 +68,19 @@ func (s *UserServiceServer) Register(ctx context.Context, req *pb.RegisterReques
 	}, nil
 }
 
-// Login обрабатывает запрос на вход пользователя
+// Login handles user login request
 func (s *UserServiceServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.AuthResponse, error) {
-	// Хешируем пароль для тестирования
+	// Hash password for testing
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
 	createdAt := time.Now()
 
-	// Настраиваем ожидаемый запрос
+	// Set up expected query
 	s.DB.ExpectQuery("SELECT id, username, email, password, created_at FROM users WHERE username = \\$1").
 		WithArgs(req.Username).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "username", "email", "password", "created_at"}).
 			AddRow(1, req.Username, "test@example.com", hashedPassword, createdAt))
 
-	// Проверяем пароль
+	// Check password
 	if req.Password != "password123" {
 		return nil, status.Error(codes.Unauthenticated, "Invalid username or password")
 	}
@@ -94,9 +96,9 @@ func (s *UserServiceServer) Login(ctx context.Context, req *pb.LoginRequest) (*p
 	}, nil
 }
 
-// GetProfile обрабатывает запрос на получение профиля пользователя
+// GetProfile handles the request to get user profile
 func (s *UserServiceServer) GetProfile(ctx context.Context, req *pb.ProfileRequest) (*pb.ProfileResponse, error) {
-	// Проверяем наличие токена или user_id
+	// Check if token or user_id is provided
 	if req.Token == "" && req.UserId == 0 {
 		return &pb.ProfileResponse{
 			Success: false,
@@ -104,24 +106,24 @@ func (s *UserServiceServer) GetProfile(ctx context.Context, req *pb.ProfileReque
 		}, status.Error(codes.InvalidArgument, "Either token or user_id must be provided")
 	}
 
-	// Если указан токен, проверяем его
+	// If token is provided, check it
 	var userID int32 = req.UserId
 	if req.Token != "" {
-		// Для тестирования считаем, что токен "invalid_token" недействителен
+		// For testing purposes, consider token "invalid_token" as invalid
 		if req.Token == "invalid_token" {
 			return &pb.ProfileResponse{
 				Success: false,
 				Error:   "Invalid token",
 			}, status.Error(codes.Unauthenticated, "Invalid token")
 		}
-		// Для тестирования считаем, что токен "test_token" соответствует пользователю с ID 1
+		// For testing purposes, consider token "test_token" as valid for user with ID 1
 		userID = 1
 	}
 
-	// Если указан user_id, ищем пользователя по ID
+	// If user_id is provided, search for user by ID
 	createdAt := time.Now()
 	if userID > 0 {
-		// Для тестирования считаем, что пользователь с ID 999 не существует
+		// For testing purposes, consider user with ID 999 as non-existent
 		if userID == 999 {
 			return &pb.ProfileResponse{
 				Success: false,
@@ -129,7 +131,7 @@ func (s *UserServiceServer) GetProfile(ctx context.Context, req *pb.ProfileReque
 			}, status.Error(codes.NotFound, "User not found")
 		}
 
-		// Настраиваем ожидаемый запрос
+		// Set up expected query
 		s.DB.ExpectQuery("SELECT id, username, email, created_at FROM users WHERE id = \\$1").
 			WithArgs(userID).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "username", "email", "created_at"}).
@@ -152,9 +154,57 @@ func (s *UserServiceServer) GetProfile(ctx context.Context, req *pb.ProfileReque
 	}, status.Error(codes.NotFound, "User not found")
 }
 
-// RegisterHandler обрабатывает HTTP-запрос на регистрацию
+// UpdateProfile handles the user profile update request
+func (s *UserServiceServer) UpdateProfile(ctx context.Context, req *pb.UpdateProfileRequest) (*pb.ProfileResponse, error) {
+	// Debug output
+	log.Printf("Received token in UpdateProfile gRPC method: %s", req.Token)
+
+	// Token validation
+	if req.Token == "" {
+		return nil, status.Error(codes.Unauthenticated, "Authorization token required")
+	}
+
+	// Using hardcoded data for testing
+	user := &pb.User{
+		Id:          1,
+		Username:    "testuser",
+		Email:       "test@example.com",
+		FirstName:   "Test",
+		LastName:    "User",
+		PhoneNumber: "1234567890",
+		CreatedAt:   timestamppb.Now(),
+		UpdatedAt:   timestamppb.Now(),
+	}
+
+	// Update user fields if specified in request
+	if req.Email != "" {
+		user.Email = req.Email
+	}
+	if req.FirstName != "" {
+		user.FirstName = req.FirstName
+	}
+	if req.LastName != "" {
+		user.LastName = req.LastName
+	}
+	if req.PhoneNumber != "" {
+		user.PhoneNumber = req.PhoneNumber
+	}
+	if req.BirthDate != nil {
+		user.BirthDate = req.BirthDate
+	}
+
+	// Update update time
+	user.UpdatedAt = timestamppb.Now()
+
+	return &pb.ProfileResponse{
+		User:    user,
+		Success: true,
+	}, nil
+}
+
+// RegisterHandler handles HTTP request for user registration
 func RegisterHandler(w http.ResponseWriter, r *http.Request) {
-	// Декодируем тело запроса
+	// Decode request body
 	var req struct {
 		Username string `json:"username"`
 		Email    string `json:"email"`
@@ -166,35 +216,34 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Создаем gRPC-запрос
+	// Create gRPC request
 	grpcReq := &pb.RegisterRequest{
 		Username: req.Username,
 		Email:    req.Email,
 		Password: req.Password,
 	}
 
-	// Вызываем gRPC-метод
+	// Call gRPC method
 	resp, err := userClient.Register(r.Context(), grpcReq)
 	if err != nil {
 		st, ok := status.FromError(err)
-		if ok && st.Code() == codes.AlreadyExists {
-			http.Error(w, st.Message(), http.StatusConflict)
-			return
+		if ok {
+			http.Error(w, st.Message(), http.StatusBadRequest)
+		} else {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 		}
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// Формируем HTTP-ответ
+	// Format HTTP response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-
 	json.NewEncoder(w).Encode(resp)
 }
 
-// LoginHandler обрабатывает HTTP-запрос на вход
+// LoginHandler handles HTTP request for user login
 func LoginHandler(w http.ResponseWriter, r *http.Request) {
-	// Декодируем тело запроса
+	// Decode request body
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -205,25 +254,25 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Создаем gRPC-запрос
+	// Create gRPC request
 	grpcReq := &pb.LoginRequest{
 		Username: req.Username,
 		Password: req.Password,
 	}
 
-	// Вызываем gRPC-метод
+	// Call gRPC method
 	resp, err := userClient.Login(r.Context(), grpcReq)
 	if err != nil {
 		st, ok := status.FromError(err)
-		if ok && st.Code() == codes.Unauthenticated {
+		if ok {
 			http.Error(w, st.Message(), http.StatusUnauthorized)
-			return
+		} else {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 		}
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// Формируем HTTP-ответ
+	// Format HTTP response
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -283,78 +332,156 @@ func profileHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// updateProfileHandler обрабатывает HTTP-запрос на обновление профиля пользователя
+func updateProfileHandler(w http.ResponseWriter, r *http.Request) {
+	// Получение token из заголовка Authorization
+	token := r.Header.Get("Authorization")
+	if token != "" && strings.HasPrefix(token, "Bearer ") {
+		token = strings.TrimPrefix(token, "Bearer ")
+	}
+
+	// Отладочный вывод
+	log.Printf("Received token in updateProfileHandler: %s", token)
+
+	// Проверка наличия токена
+	if token == "" {
+		http.Error(w, "Authorization token required", http.StatusUnauthorized)
+		return
+	}
+
+	// Декодируем тело запроса
+	var req struct {
+		FirstName   string                 `json:"first_name"`
+		LastName    string                 `json:"last_name"`
+		Email       string                 `json:"email"`
+		PhoneNumber string                 `json:"phone_number"`
+		BirthDate   *timestamppb.Timestamp `json:"birth_date"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Создаем gRPC-запрос
+	grpcReq := &pb.UpdateProfileRequest{
+		Token:       token,
+		FirstName:   req.FirstName,
+		LastName:    req.LastName,
+		Email:       req.Email,
+		PhoneNumber: req.PhoneNumber,
+		BirthDate:   req.BirthDate,
+	}
+
+	// Вызываем gRPC-метод
+	resp, err := userClient.UpdateProfile(r.Context(), grpcReq)
+	if err != nil {
+		st, ok := status.FromError(err)
+		if ok {
+			switch st.Code() {
+			case codes.InvalidArgument:
+				http.Error(w, st.Message(), http.StatusBadRequest)
+				return
+			case codes.Unauthenticated:
+				http.Error(w, st.Message(), http.StatusUnauthorized)
+				return
+			}
+		}
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Формируем HTTP-ответ
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
 // Глобальная переменная для gRPC-клиента
 var userClient pb.UserServiceClient
 
-// Вспомогательная функция для настройки gRPC-сервера
-func setupGRPCServer(t *testing.T) {
-	var err error
+// setupGRPCServer настраивает тестовый gRPC сервер
+func setupGRPCServer(t *testing.T) (*grpc.Server, net.Listener) {
 	// Создаем мок для базы данных
-	var mockSQL sqlmock.Sqlmock
-	dbConn, mockSQL, err = sqlmock.New()
+	_, mock, err := sqlmock.New()
+	require.NoError(t, err)
+
+	// Создаем тестовый сервер gRPC
+	lis, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
-		t.Fatalf("Error creating mock database: %v", err)
+		t.Fatalf("Не удалось создать слушатель: %v", err)
 	}
-
-	lis = bufconn.Listen(bufSize)
-	grpcServer = grpc.NewServer()
-
-	// Регистрируем gRPC-сервер
-	pb.RegisterUserServiceServer(grpcServer, &UserServiceServer{DB: mockSQL})
+	s := grpc.NewServer()
+	pb.RegisterUserServiceServer(s, &UserServiceServer{DB: mock})
 
 	go func() {
-		if err := grpcServer.Serve(lis); err != nil {
-			t.Fatalf("Failed to start gRPC server: %v", err)
+		if err := s.Serve(lis); err != nil {
+			t.Logf("Ошибка при запуске сервера: %v", err)
 		}
 	}()
+
+	t.Logf("gRPC сервер запущен на: %s", lis.Addr().String())
+	return s, lis
 }
 
-// Диалер для gRPC через буфер вместо сети
-func bufDialer(context.Context, string) (net.Conn, error) {
-	return lis.Dial()
+// setupGRPCClient создает gRPC клиент для тестирования
+func setupGRPCClient(t *testing.T, lis net.Listener) *grpc.ClientConn {
+	// Создаем клиентское соединение к серверу
+	conn, err := grpc.Dial(lis.Addr().String(), grpc.WithInsecure())
+	if err != nil {
+		t.Fatalf("Не удалось подключиться к серверу: %v", err)
+	}
+
+	// Инициализируем gRPC клиент
+	userClient = pb.NewUserServiceClient(conn)
+
+	t.Logf("gRPC клиент подключен к: %s", lis.Addr().String())
+	return conn
 }
 
 // Вспомогательная функция для создания HTTP-сервера
 func setupHTTPServer(t *testing.T, conn *grpc.ClientConn) *httptest.Server {
-	// Инициализация gRPC-клиента
-	userClient = pb.NewUserServiceClient(conn)
-
 	// Создание HTTP-сервера
 	r := mux.NewRouter()
 	r.HandleFunc("/api/register", RegisterHandler).Methods("POST")
 	r.HandleFunc("/api/login", LoginHandler).Methods("POST")
 	r.HandleFunc("/api/profile", profileHandler).Methods("GET")
+	r.HandleFunc("/api/update-profile", updateProfileHandler).Methods("PUT")
 
-	// Запуск тестового HTTP-сервера
-	return httptest.NewServer(r)
+	server := httptest.NewServer(r)
+	t.Logf("HTTP server started at: %s", server.URL)
+
+	return server
 }
 
 // Очистка ресурсов после теста
-func tearDown(conn *grpc.ClientConn, server *httptest.Server) {
-	conn.Close()
-	grpcServer.Stop()
-	server.Close()
-	if dbConn != nil {
-		dbConn.Close()
+func tearDown(conn *grpc.ClientConn, server *httptest.Server, grpcServer *grpc.Server) {
+	if conn != nil {
+		conn.Close()
+	}
+	if grpcServer != nil {
+		grpcServer.Stop()
+	}
+	if server != nil {
+		server.Close()
 	}
 }
 
 func TestIntegration_Register(t *testing.T) {
-	// Настраиваем gRPC-сервер
-	setupGRPCServer(t)
-
-	// Устанавливаем gRPC соединение
-	ctx := context.Background()
-	conn, err := grpc.DialContext(ctx, "bufnet",
-		grpc.WithContextDialer(bufDialer),
-		grpc.WithInsecure())
-	if err != nil {
-		t.Fatalf("Failed to dial bufnet: %v", err)
+	if testing.Short() {
+		t.Skip("Пропускаем интеграционные тесты в коротком режиме")
 	}
+
+	// Настраиваем gRPC сервер
+	grpcServer, listener := setupGRPCServer(t)
+	defer grpcServer.Stop()
+
+	// Настраиваем gRPC клиент
+	conn := setupGRPCClient(t, listener)
+	defer conn.Close()
 
 	// Настраиваем HTTP-сервер
 	server := setupHTTPServer(t, conn)
-	defer tearDown(conn, server)
+	defer tearDown(conn, server, grpcServer)
 
 	// Создаем HTTP запрос
 	reqBody := map[string]string{
@@ -437,21 +564,21 @@ func TestIntegration_Login(t *testing.T) {
 }
 
 func TestIntegration_GetProfile(t *testing.T) {
-	// Настраиваем gRPC-сервер
-	setupGRPCServer(t)
-
-	// Устанавливаем gRPC соединение
-	ctx := context.Background()
-	conn, err := grpc.DialContext(ctx, "bufnet",
-		grpc.WithContextDialer(bufDialer),
-		grpc.WithInsecure())
-	if err != nil {
-		t.Fatalf("Failed to dial bufnet: %v", err)
+	if testing.Short() {
+		t.Skip("Пропускаем интеграционные тесты в коротком режиме")
 	}
+
+	// Настраиваем gRPC сервер
+	grpcServer, listener := setupGRPCServer(t)
+	defer grpcServer.Stop()
+
+	// Настраиваем gRPC клиент
+	conn := setupGRPCClient(t, listener)
+	defer conn.Close()
 
 	// Настраиваем HTTP-сервер
 	server := setupHTTPServer(t, conn)
-	defer tearDown(conn, server)
+	defer tearDown(conn, server, grpcServer)
 
 	// Создаем HTTP клиент
 	client := &http.Client{}
@@ -544,6 +671,118 @@ func TestIntegration_GetProfile(t *testing.T) {
 		// Проверяем код ответа - ожидаем 401 Unauthorized
 		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	})
+}
+
+// TestIntegration_UpdateProfile tests the user profile update functionality
+func TestIntegration_UpdateProfile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration tests in short mode")
+	}
+
+	// Set up gRPC server
+	grpcServer, listener := setupGRPCServer(t)
+	defer grpcServer.Stop()
+
+	// Set up gRPC client
+	conn := setupGRPCClient(t, listener)
+	defer conn.Close()
+
+	// Explicitly ensure that userClient is initialized
+	if userClient == nil {
+		userClient = pb.NewUserServiceClient(conn)
+	}
+
+	// Set up HTTP server
+	httpServer := setupHTTPServer(t, conn)
+	defer tearDown(conn, httpServer, grpcServer)
+
+	// Step 1: Register a user
+	registerReq := map[string]string{
+		"username": "testuser",
+		"password": "password",
+		"email":    "test@example.com",
+	}
+	registerBody, _ := json.Marshal(registerReq)
+
+	registerResp, err := http.Post(httpServer.URL+"/api/register", "application/json", bytes.NewBuffer(registerBody))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, registerResp.StatusCode, "Error registering user")
+
+	// Debug output for registration
+	registerRespBody, _ := io.ReadAll(registerResp.Body)
+	t.Logf("Registration response body: %s", string(registerRespBody))
+	registerResp.Body.Close()
+
+	// Extract token from registration response
+	var registerResult struct {
+		Token string `json:"token"`
+		User  struct {
+			ID       int    `json:"id"`
+			Username string `json:"username"`
+			Email    string `json:"email"`
+		} `json:"user"`
+	}
+
+	err = json.Unmarshal(registerRespBody, &registerResult)
+	require.NoError(t, err, "Error parsing registration response")
+	require.NotEmpty(t, registerResult.Token, "Token missing in registration response")
+
+	token := registerResult.Token
+	t.Logf("Token received during registration: %s", token)
+
+	// Skip login since we already have a token
+
+	// First check HTTP request for profile update
+	updateData := map[string]interface{}{
+		"first_name":   "Updated",
+		"last_name":    "Name",
+		"email":        "updated@example.com",
+		"phone_number": "+79001234567",
+	}
+	updateBody, _ := json.Marshal(updateData)
+
+	// Create HTTP request
+	updateHTTPReq, err := http.NewRequest("PUT", httpServer.URL+"/api/update-profile", bytes.NewBuffer(updateBody))
+	require.NoError(t, err)
+
+	// Add token to header
+	updateHTTPReq.Header.Set("Content-Type", "application/json")
+	updateHTTPReq.Header.Set("Authorization", "Bearer "+token)
+
+	// Debug output
+	t.Logf("Sending HTTP request with token: %s", token)
+	t.Logf("Authorization header: %s", updateHTTPReq.Header.Get("Authorization"))
+	t.Logf("Request URL: %s", updateHTTPReq.URL.String())
+	t.Logf("Request method: %s", updateHTTPReq.Method)
+	t.Logf("Request body: %s", updateBody)
+
+	// Send request
+	httpClient := &http.Client{}
+	updateResp2, err := httpClient.Do(updateHTTPReq)
+	require.NoError(t, err)
+	defer updateResp2.Body.Close()
+
+	// Debug output
+	t.Logf("Received HTTP response with code: %d", updateResp2.StatusCode)
+
+	// Check response code
+	require.Equal(t, http.StatusOK, updateResp2.StatusCode, "HTTP request for profile update returned code %d instead of 200", updateResp2.StatusCode)
+
+	// Check response body
+	var updateRespBody struct {
+		Success bool `json:"success"`
+		User    struct {
+			Email     string `json:"email"`
+			FirstName string `json:"first_name"`
+			LastName  string `json:"last_name"`
+		} `json:"user"`
+	}
+	err = json.NewDecoder(updateResp2.Body).Decode(&updateRespBody)
+	require.NoError(t, err)
+	require.True(t, updateRespBody.Success)
+	require.Equal(t, "updated@example.com", updateRespBody.User.Email)
+
+	t.Log("Test passed successfully")
 }
 
 // Вспомогательная функция для генерации хеша пароля

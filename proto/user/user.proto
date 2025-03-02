@@ -16,6 +16,9 @@ service UserService {
 
   // GetProfile returns all user profile data
   rpc GetProfile(ProfileRequest) returns (ProfileResponse) {}
+
+  // UpdateProfile updates user profile data
+  rpc UpdateProfile(UpdateProfileRequest) returns (ProfileResponse) {}
 }
 
 // Request message for registering a new user
@@ -39,6 +42,16 @@ message LoginRequest {
 message ProfileRequest {
   string token = 1;
   int32 user_id = 2;
+}
+
+// Request for updating profile data
+message UpdateProfileRequest {
+  string token = 1; // Токен для аутентификации
+  string first_name = 2;
+  string last_name = 3;
+  google.protobuf.Timestamp birth_date = 4;
+  string phone_number = 5;
+  string email = 6;
 }
 
 // User details

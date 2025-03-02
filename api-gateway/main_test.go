@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,7 +21,7 @@ import (
 	pb "github.com/levalimpiev/service_oriented_architectures/proto/user"
 )
 
-// Реализация мока для gRPC клиента
+// MockUserClient implementation for gRPC client
 type MockUserClient struct {
 	mock.Mock
 }
@@ -41,7 +42,7 @@ func (m *MockUserClient) Login(ctx context.Context, in *pb.LoginRequest, opts ..
 	return args.Get(0).(*pb.AuthResponse), args.Error(1)
 }
 
-// Реализация метода GetProfile для MockUserClient
+// GetProfile implementation for MockUserClient
 func (m *MockUserClient) GetProfile(ctx context.Context, in *pb.ProfileRequest, opts ...grpc.CallOption) (*pb.ProfileResponse, error) {
 	args := m.Called(ctx, in)
 	if args.Get(0) == nil {
@@ -50,16 +51,25 @@ func (m *MockUserClient) GetProfile(ctx context.Context, in *pb.ProfileRequest, 
 	return args.Get(0).(*pb.ProfileResponse), args.Error(1)
 }
 
-// Настройка тестового окружения
+// UpdateProfile implementation for MockUserClient
+func (m *MockUserClient) UpdateProfile(ctx context.Context, in *pb.UpdateProfileRequest, opts ...grpc.CallOption) (*pb.ProfileResponse, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*pb.ProfileResponse), args.Error(1)
+}
+
+// Test environment setup
 func setupTestAPI(t *testing.T) (*MockUserClient, *mux.Router) {
 	mockClient := new(MockUserClient)
-	userClient = mockClient // Заменяем глобальную переменную на мок
+	userClient = mockClient // Replace global variable with mock
 
 	r := mux.NewRouter()
 	r.HandleFunc("/api/register", registerHandler).Methods("POST")
 	r.HandleFunc("/api/login", loginHandler).Methods("POST")
 	r.HandleFunc("/api/profile", profileHandler).Methods("GET")
-
+	r.HandleFunc("/api/update-profile", updateProfileHandler).Methods("PUT")
 	return mockClient, r
 }
 
@@ -255,19 +265,23 @@ func TestInvalidRequestBody(t *testing.T) {
 }
 
 func TestProfileHandlerAPI_ByUserID(t *testing.T) {
-	// Настройка API для тестирования
-	_, router := setupTestAPI(t)
+	// Set up API for testing
+	mockClient, router := setupTestAPI(t)
 
-	// Создание запроса только с user_id (без токена)
+	// Configure mock for GetProfile method to verify that it's not called
+	// when no token is provided (the handler should return error before calling GetProfile)
+	mockClient.On("GetProfile", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("GetProfile should not be called without token"))
+
+	// Create request with only user_id (no token)
 	req := httptest.NewRequest("GET", "/api/profile?user_id=1", nil)
 	resp := httptest.NewRecorder()
 
-	// Выполнение запроса
+	// Execute request
 	router.ServeHTTP(resp, req)
 
-	// Проверка результата - должен быть отказ в доступе
+	// Check result - should be unauthorized
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
-	// Проверяем текст ошибки
+	// Check error message
 	assert.Contains(t, resp.Body.String(), "Authorization token required")
 }
 
@@ -353,17 +367,21 @@ func TestProfileHandlerAPI_UserNotFound(t *testing.T) {
 }
 
 func TestProfileHandlerAPI_NoParameters(t *testing.T) {
-	// Настройка API для тестирования
-	_, router := setupTestAPI(t)
+	// Set up API for testing
+	mockClient, router := setupTestAPI(t)
 
-	// Создание запроса без параметров
+	// Configure mock for GetProfile method to verify that it's not called
+	// when no token is provided (the handler should return error before calling GetProfile)
+	mockClient.On("GetProfile", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("GetProfile should not be called without token"))
+
+	// Create request without parameters
 	req := httptest.NewRequest("GET", "/api/profile", nil)
 	resp := httptest.NewRecorder()
 
-	// Выполнение запроса
+	// Execute request
 	router.ServeHTTP(resp, req)
 
-	// Проверка результата - ожидаем ошибку "Authorization token required"
+	// Check result - should be unauthorized
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
 	assert.Contains(t, resp.Body.String(), "Authorization token required")
 }
@@ -382,4 +400,166 @@ func TestProfileHandlerAPI_InvalidUserID(t *testing.T) {
 	// Проверка результата - ожидаем ошибку "Authorization token required"
 	assert.Equal(t, http.StatusUnauthorized, resp.Code)
 	assert.Contains(t, resp.Body.String(), "Authorization token required")
+}
+
+func TestUpdateProfileHandlerAPI(t *testing.T) {
+	// Set up API for testing
+	mockClient, router := setupTestAPI(t)
+
+	// Prepare test data
+	testUser := &pb.User{
+		Id:          1,
+		Username:    "testuser",
+		Email:       "updated@example.com",
+		FirstName:   "Ivan Updated",
+		LastName:    "Petrov",
+		PhoneNumber: "+79001234567",
+	}
+
+	// Set up expected response from mock service
+	mockResponse := &pb.ProfileResponse{
+		User:    testUser,
+		Success: true,
+		Error:   "",
+	}
+
+	// JWT token for testing
+	testToken := "test.jwt.token"
+
+	// Prepare update request
+	updateData := UpdateProfileRequest{
+		FirstName:   "Ivan Updated",
+		LastName:    "Petrov",
+		Email:       "updated@example.com",
+		PhoneNumber: "+79001234567",
+	}
+
+	// Configure mock for UpdateProfile method
+	mockClient.On("UpdateProfile", mock.Anything, mock.MatchedBy(func(req *pb.UpdateProfileRequest) bool {
+		return req.Token == testToken &&
+			req.FirstName == updateData.FirstName &&
+			req.LastName == updateData.LastName &&
+			req.Email == updateData.Email &&
+			req.PhoneNumber == updateData.PhoneNumber
+	})).Return(mockResponse, nil)
+
+	// Create request with JSON data
+	jsonData, err := json.Marshal(updateData)
+	assert.NoError(t, err)
+
+	// Create HTTP request
+	req, _ := http.NewRequest("PUT", "/api/update-profile", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+testToken)
+
+	// Execute request and record response
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	// Check response status code
+	assert.Equal(t, http.StatusOK, resp.Code)
+
+	// Parse response body
+	var responseBody map[string]interface{}
+	err = json.Unmarshal(resp.Body.Bytes(), &responseBody)
+	assert.NoError(t, err)
+
+	// Verify response contains expected data
+	assert.True(t, responseBody["success"].(bool))
+	user := responseBody["user"].(map[string]interface{})
+	assert.Equal(t, "updated@example.com", user["email"])
+	assert.Equal(t, "Ivan Updated", user["first_name"])
+	assert.Equal(t, "Petrov", user["last_name"])
+}
+
+func TestUpdateProfileHandlerAPI_NoToken(t *testing.T) {
+	// Настройка API для тестирования
+	_, router := setupTestAPI(t)
+
+	// Подготовка запроса обновления
+	updateData := UpdateProfileRequest{
+		FirstName: "Ivan Updated",
+	}
+
+	// Создание запроса с JSON данными, но без токена
+	jsonData, err := json.Marshal(updateData)
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest("PUT", "/api/update-profile", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	// Выполнение запроса
+	router.ServeHTTP(resp, req)
+
+	// Проверка результата - должен быть отказ в доступе
+	assert.Equal(t, http.StatusUnauthorized, resp.Code)
+	assert.Contains(t, resp.Body.String(), "Authorization token required")
+}
+
+func TestUpdateProfileHandlerAPI_InvalidBody(t *testing.T) {
+	// Настройка API для тестирования
+	_, router := setupTestAPI(t)
+
+	// JWT токен для тестирования
+	testToken := "test.jwt.token"
+
+	// Создание запроса с некорректным JSON
+	req := httptest.NewRequest("PUT", "/api/update-profile", bytes.NewBufferString("{invalid json"))
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	// Выполнение запроса
+	router.ServeHTTP(resp, req)
+
+	// Проверка результата - должна быть ошибка некорректного запроса
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Contains(t, resp.Body.String(), "Invalid request body")
+}
+
+func TestUpdateProfileHandlerAPI_NoData(t *testing.T) {
+	// Настройка API для тестирования
+	_, router := setupTestAPI(t)
+
+	// JWT токен для тестирования
+	testToken := "test.jwt.token"
+
+	// Подготовка пустого запроса обновления
+	updateData := UpdateProfileRequest{}
+
+	// Создание запроса с пустыми данными
+	jsonData, err := json.Marshal(updateData)
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest("PUT", "/api/update-profile", bytes.NewBuffer(jsonData))
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	// Выполнение запроса
+	router.ServeHTTP(resp, req)
+
+	// Проверка результата - должна быть ошибка пустого запроса
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Contains(t, resp.Body.String(), "No profile data provided for update")
+}
+
+func TestUpdateProfileHandlerAPI_MethodNotAllowed(t *testing.T) {
+	// Настройка API для тестирования
+	_, router := setupTestAPI(t)
+
+	// Подготовка некорректного запроса (GET вместо PUT)
+	req := httptest.NewRequest("GET", "/api/update-profile", nil)
+	req.Header.Set("Authorization", "Bearer test.jwt.token")
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	// Выполнение запроса
+	router.ServeHTTP(resp, req)
+
+	// В Gorilla Mux запрос с неправильным методом вернёт 405, но маршрутизатор
+	// может вернуть 404, если не найдет подходящий обработчик
+	// Поэтому проверяем, что код ответа не 200 (успех)
+	assert.NotEqual(t, http.StatusOK, resp.Code)
 }

@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/levalimpiev/service_oriented_architectures/proto/user"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
@@ -69,7 +70,26 @@ func LoginUser(ctx context.Context, username, password string) (*pb.AuthResponse
 // GetUserProfile calls the GetProfile RPC
 func GetUserProfile(ctx context.Context, token string, userID int32) (*pb.ProfileResponse, error) {
 	req := &pb.ProfileRequest{
-		Token: token,
+		Token:  token,
+		UserId: userID,
 	}
 	return userClient.GetProfile(ctx, req)
+}
+
+// UpdateUserProfile updates user profile data
+func UpdateUserProfile(ctx context.Context, token string, req UpdateProfileRequest) (*pb.ProfileResponse, error) {
+	request := &pb.UpdateProfileRequest{
+		Token:       token,
+		FirstName:   req.FirstName,
+		LastName:    req.LastName,
+		Email:       req.Email,
+		PhoneNumber: req.PhoneNumber,
+	}
+
+	// Add birth date if it's not null
+	if req.BirthDate != nil && !req.BirthDate.IsZero() {
+		request.BirthDate = timestamppb.New(*req.BirthDate)
+	}
+
+	return userClient.UpdateProfile(ctx, request)
 }

@@ -6,155 +6,231 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
-// Базовый URL для gRPC сервиса пользователей
-var userServiceGRPCAddr string
-
+// Main function to start the API gateway server
 func main() {
-	// Получение URL сервиса пользователей из переменной окружения
-	userServiceGRPCAddr = getEnv("USER_SERVICE_GRPC", "user-service:50051")
+	// Get environment variables
+	port := getEnv("PORT", "8080")
+	userServiceAddr := getEnv("USER_SERVICE_ADDR", "localhost:50051")
 
-	// Инициализация gRPC клиента
-	err := InitGRPCClient(userServiceGRPCAddr)
+	// Set up gRPC connection to the user service
+	var opts []grpc.DialOption
+	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+	conn, err := grpc.Dial(userServiceAddr, opts...)
 	if err != nil {
-		log.Fatalf("Failed to initialize gRPC client: %v", err)
+		log.Fatalf("Failed to connect to user service: %v", err)
 	}
-	defer CloseGRPCClient()
+	defer conn.Close()
 
-	log.Printf("User service gRPC available at: %s", userServiceGRPCAddr)
+	// Initialize gRPC client
+	InitGRPCClient(userServiceAddr)
 
-	// Создание маршрутизатора
+	// Create router and set up routes
 	r := mux.NewRouter()
-
-	// Настройка маршрутов
 	setupRoutes(r)
 
-	// Запуск сервера
-	port := getEnv("PORT", "8080")
-	log.Printf("API Gateway started on port %s", port)
+	// Start HTTP server
+	log.Printf("API Gateway is running on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, r))
 }
 
-// Структура для запроса регистрации
+// Data structures for request handling
+
+// RegisterRequest represents user registration data
 type RegisterRequest struct {
 	Username string `json:"username"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
 
-// Структура для запроса аутентификации
+// LoginRequest represents login credentials
 type LoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
-// authMiddleware проверяет валидность токена
+// UpdateProfileRequest represents user profile update data
+type UpdateProfileRequest struct {
+	FirstName   string     `json:"first_name,omitempty"`
+	LastName    string     `json:"last_name,omitempty"`
+	Email       string     `json:"email,omitempty"`
+	PhoneNumber string     `json:"phone_number,omitempty"`
+	BirthDate   *time.Time `json:"birth_date,omitempty"`
+}
+
+// Middleware for authentication
 func authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Получение токена из заголовка
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			http.Error(w, "Authorization header is required", http.StatusUnauthorized)
+		// Get token from Authorization header
+		token := r.Header.Get("Authorization")
+		if token == "" || !strings.HasPrefix(token, "Bearer ") {
+			http.Error(w, "Authorization token required", http.StatusUnauthorized)
 			return
 		}
+		token = strings.TrimPrefix(token, "Bearer ")
 
-		// Проверка формата токена "Bearer <token>"
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			http.Error(w, "Authorization header format must be 'Bearer <token>'", http.StatusUnauthorized)
-			return
-		}
-
-		token := parts[1]
-
-		// Токен передается в сервис пользователей для проверки
-		// через заголовок запроса
+		// Add token to request context
 		ctx := context.WithValue(r.Context(), "token", token)
-
-		// Вызов следующего обработчика с обновленным контекстом
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// Обработчик для регистрации пользователей
+// Handler for user registration
 func registerHandler(w http.ResponseWriter, r *http.Request) {
-	var req RegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+	// Check request method
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Установка таймаута для gRPC запроса
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	// Decode JSON request
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
 
-	// Вызов gRPC метода
-	resp, err := RegisterUser(ctx, req.Username, req.Email, req.Password)
+	// Validate required fields
+	if req.Username == "" || req.Email == "" || req.Password == "" {
+		http.Error(w, "Username, email, and password are required", http.StatusBadRequest)
+		return
+	}
+
+	// Forward request to gRPC service
+	resp, err := RegisterUser(r.Context(), req.Username, req.Email, req.Password)
 	if err != nil {
 		handleGRPCError(w, err)
 		return
 	}
 
-	// Формирование JSON-ответа
+	// Send response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(resp)
 }
 
-// Обработчик для аутентификации пользователей
+// Handler for user login
 func loginHandler(w http.ResponseWriter, r *http.Request) {
-	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+	// Check request method
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Установка таймаута для gRPC запроса
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	// Decode JSON request
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
 
-	// Вызов gRPC метода
-	resp, err := LoginUser(ctx, req.Username, req.Password)
+	// Forward request to gRPC service
+	resp, err := LoginUser(r.Context(), req.Username, req.Password)
 	if err != nil {
 		handleGRPCError(w, err)
 		return
 	}
 
-	// Формирование JSON-ответа
+	// Send response
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-// Обработчик для получения профиля пользователя
+// Handler for user profile retrieval
 func profileHandler(w http.ResponseWriter, r *http.Request) {
-	// Получение token из заголовка Authorization
+	// Check request method
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get token from request header
 	token := r.Header.Get("Authorization")
-	if token == "" || !strings.HasPrefix(token, "Bearer ") {
+	if token != "" && strings.HasPrefix(token, "Bearer ") {
+		token = strings.TrimPrefix(token, "Bearer ")
+	}
+
+	// Get user ID from query parameters
+	userIDParam := r.URL.Query().Get("user_id")
+	var userID int32 = 0
+	if userIDParam != "" {
+		id, err := strconv.Atoi(userIDParam)
+		if err != nil {
+			http.Error(w, "Authorization token required", http.StatusUnauthorized)
+			return
+		}
+		userID = int32(id)
+	}
+
+	// Require token for security
+	if token == "" {
 		http.Error(w, "Authorization token required", http.StatusUnauthorized)
 		return
 	}
-	token = strings.TrimPrefix(token, "Bearer ")
 
-	// Запрещаем доступ по user_id, игнорируем этот параметр
-	// Установка таймаута для gRPC запроса
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// Вызов gRPC метода только с токеном
-	resp, err := GetUserProfile(ctx, token, 0)
+	// Forward request to gRPC service
+	ctx := r.Context()
+	resp, err := GetUserProfile(ctx, token, userID)
 	if err != nil {
 		handleGRPCError(w, err)
 		return
 	}
 
-	// Формирование JSON-ответа
+	// Format JSON response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// Handler for user profile update
+func updateProfileHandler(w http.ResponseWriter, r *http.Request) {
+	// Check request method
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get token from Authorization header
+	token := r.Header.Get("Authorization")
+	if token == "" || !strings.HasPrefix(token, "Bearer ") {
+		log.Printf("Error: token missing or invalid format: %s", token)
+		http.Error(w, "Authorization token required", http.StatusUnauthorized)
+		return
+	}
+	token = strings.TrimPrefix(token, "Bearer ")
+	log.Printf("Token received in updateProfileHandler: %s", token)
+
+	// Decode JSON request
+	var req UpdateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Check for empty request
+	if req.FirstName == "" && req.LastName == "" && req.Email == "" && req.PhoneNumber == "" && req.BirthDate == nil {
+		http.Error(w, "No profile data provided for update", http.StatusBadRequest)
+		return
+	}
+
+	// Forward request to gRPC service
+	resp, err := UpdateUserProfile(r.Context(), token, req)
+	if err != nil {
+		handleGRPCError(w, err)
+		return
+	}
+
+	// Format JSON response
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -196,4 +272,5 @@ func setupRoutes(router *mux.Router) {
 	router.HandleFunc("/api/register", registerHandler).Methods("POST")
 	router.HandleFunc("/api/login", loginHandler).Methods("POST")
 	router.HandleFunc("/api/profile", profileHandler).Methods("GET")
+	router.HandleFunc("/api/update-profile", updateProfileHandler).Methods("PUT")
 }

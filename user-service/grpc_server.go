@@ -24,7 +24,7 @@ type userServiceServer struct {
 	tokenService token.TokenService
 }
 
-// NewUserServiceServer создает новый экземпляр сервера с указанными зависимостями
+// NewUserServiceServer creates a new server instance with the specified dependencies
 func NewUserServiceServer(db *sql.DB, tokenService token.TokenService) *userServiceServer {
 	return &userServiceServer{
 		db:           db,
@@ -239,6 +239,123 @@ func (s *userServiceServer) GetProfile(ctx context.Context, req *pb.ProfileReque
 	if birthDateResult.Valid {
 		birthDate = birthDateResult.Time
 		user.BirthDate = timestamppb.New(birthDate)
+	}
+
+	return &pb.ProfileResponse{
+		User:    user,
+		Success: true,
+	}, nil
+}
+
+// UpdateProfile updates user profile data
+func (s *userServiceServer) UpdateProfile(ctx context.Context, req *pb.UpdateProfileRequest) (*pb.ProfileResponse, error) {
+	// Check if token is provided
+	if req.Token == "" {
+		return &pb.ProfileResponse{
+			Success: false,
+			Error:   "Authorization token is required",
+		}, status.Errorf(codes.Unauthenticated, "Authorization token is required")
+	}
+
+	// Verify token and get user ID
+	claims, err := s.tokenService.VerifyToken(req.Token)
+	if err != nil {
+		log.Printf("Error verifying token: %v", err)
+		return &pb.ProfileResponse{
+			Success: false,
+			Error:   "Invalid token",
+		}, status.Errorf(codes.Unauthenticated, "Invalid token")
+	}
+	userID := int32(claims.UserID)
+
+	// Start transaction
+	tx, err := s.db.Begin()
+	if err != nil {
+		log.Printf("Error starting transaction: %v", err)
+		return &pb.ProfileResponse{
+			Success: false,
+			Error:   "Failed to update profile",
+		}, status.Errorf(codes.Internal, "Failed to update profile")
+	}
+	defer tx.Rollback()
+
+	// Prepare SQL query for profile update
+	query := `
+		UPDATE users
+		SET first_name = COALESCE($1, first_name),
+		    last_name = COALESCE($2, last_name),
+		    phone_number = COALESCE($3, phone_number),
+		    email = COALESCE($4, email),
+		    birth_date = COALESCE($5, birth_date),
+		    updated_at = NOW()
+		WHERE id = $6
+		RETURNING id, username, email, first_name, last_name, birth_date, phone_number, created_at, updated_at
+	`
+
+	// Prepare parameters
+	var firstName, lastName, phoneNumber, email *string
+	var birthDate *time.Time
+
+	if req.FirstName != "" {
+		firstName = &req.FirstName
+	}
+	if req.LastName != "" {
+		lastName = &req.LastName
+	}
+	if req.PhoneNumber != "" {
+		phoneNumber = &req.PhoneNumber
+	}
+	if req.Email != "" {
+		email = &req.Email
+	}
+	if req.BirthDate != nil {
+		bd := req.BirthDate.AsTime()
+		birthDate = &bd
+	}
+
+	// Execute query
+	var dbUserID int32
+	var dbUsername, dbEmail, dbFirstName, dbLastName, dbPhoneNumber string
+	var dbCreatedAt, dbUpdatedAt time.Time
+	var dbBirthDateResult sql.NullTime
+
+	err = tx.QueryRow(query, firstName, lastName, phoneNumber, email, birthDate, userID).Scan(
+		&dbUserID, &dbUsername, &dbEmail, &dbFirstName, &dbLastName,
+		&dbBirthDateResult, &dbPhoneNumber, &dbCreatedAt, &dbUpdatedAt,
+	)
+
+	if err != nil {
+		log.Printf("Error updating user profile: %v", err)
+		return &pb.ProfileResponse{
+			Success: false,
+			Error:   "Failed to update profile",
+		}, status.Errorf(codes.Internal, "Failed to update profile")
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		log.Printf("Error committing transaction: %v", err)
+		return &pb.ProfileResponse{
+			Success: false,
+			Error:   "Failed to update profile",
+		}, status.Errorf(codes.Internal, "Failed to update profile")
+	}
+
+	// Form response with updated user data
+	user := &pb.User{
+		Id:          dbUserID,
+		Username:    dbUsername,
+		Email:       dbEmail,
+		FirstName:   dbFirstName,
+		LastName:    dbLastName,
+		PhoneNumber: dbPhoneNumber,
+		CreatedAt:   timestamppb.New(dbCreatedAt),
+		UpdatedAt:   timestamppb.New(dbUpdatedAt),
+	}
+
+	// Convert birth date, if it's not NULL
+	if dbBirthDateResult.Valid {
+		user.BirthDate = timestamppb.New(dbBirthDateResult.Time)
 	}
 
 	return &pb.ProfileResponse{

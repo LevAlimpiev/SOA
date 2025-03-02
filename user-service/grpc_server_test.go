@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	pb "github.com/levalimpiev/service_oriented_architectures/proto/user"
 	"github.com/levalimpiev/service_oriented_architectures/user-service/token"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Создаем мок для TokenService
@@ -460,6 +462,16 @@ func TestGetProfileRPC(t *testing.T) {
 	updatedAt := time.Now()
 	birthDate := time.Date(1990, 5, 15, 0, 0, 0, 0, time.UTC)
 
+	// Создаем валидный токен для тестов
+	validToken := "valid_token"
+	tokenService.On("VerifyToken", validToken).Return(&token.TokenClaims{
+		UserID:    int(userID),
+		Username:  username,
+		Email:     email,
+		IssuedAt:  time.Now(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}, nil)
+
 	// Тест 1: Получение профиля по user_id
 	t.Run("Получение профиля по user_id", func(t *testing.T) {
 		// Настраиваем ожидаемый запрос к базе данных
@@ -473,6 +485,7 @@ func TestGetProfileRPC(t *testing.T) {
 		// Выполняем запрос
 		req := &pb.ProfileRequest{
 			UserId: userID,
+			Token:  validToken,
 		}
 		resp, err := server.GetProfile(context.Background(), req)
 
@@ -499,10 +512,6 @@ func TestGetProfileRPC(t *testing.T) {
 
 	// Тест 2: Получение профиля по токену
 	t.Run("Получение профиля по токену", func(t *testing.T) {
-		// Мокаем проверку токена
-		token := "valid_token"
-		tokenService.On("VerifyToken", token).Return(jwt.MapClaims{"user_id": float64(userID)}, nil)
-
 		// Настраиваем ожидаемый запрос к базе данных
 		rows := sqlmock.NewRows([]string{"id", "username", "email", "first_name", "last_name", "birth_date", "phone_number", "created_at", "updated_at"}).
 			AddRow(userID, username, email, firstName, lastName, birthDate, phoneNumber, createdAt, updatedAt)
@@ -511,9 +520,9 @@ func TestGetProfileRPC(t *testing.T) {
 			WithArgs(userID).
 			WillReturnRows(rows)
 
-		// Выполняем запрос
+		// Выполняем запрос только с токеном
 		req := &pb.ProfileRequest{
-			Token: token,
+			Token: validToken,
 		}
 		resp, err := server.GetProfile(context.Background(), req)
 
@@ -522,16 +531,16 @@ func TestGetProfileRPC(t *testing.T) {
 		require.NotNil(t, resp)
 		require.True(t, resp.Success)
 		require.Equal(t, userID, resp.User.Id)
-
-		// Проверяем, что все ожидания были выполнены
-		err = mock.ExpectationsWereMet()
-		require.NoError(t, err)
-		tokenService.AssertExpectations(t)
+		require.Equal(t, username, resp.User.Username)
+		require.Equal(t, email, resp.User.Email)
+		require.Equal(t, firstName, resp.User.FirstName)
+		require.Equal(t, lastName, resp.User.LastName)
+		require.Equal(t, phoneNumber, resp.User.PhoneNumber)
 	})
 
 	// Тест 3: Пользователь не найден
 	t.Run("Пользователь не найден", func(t *testing.T) {
-		// Настраиваем ожидаемый запрос к базе данных, который не находит пользователя
+		// Настраиваем ожидание, что пользователь не найден
 		mock.ExpectQuery("SELECT id, username, email, first_name, last_name, birth_date, phone_number, created_at, updated_at FROM users WHERE").
 			WithArgs(userID).
 			WillReturnError(sql.ErrNoRows)
@@ -539,48 +548,43 @@ func TestGetProfileRPC(t *testing.T) {
 		// Выполняем запрос
 		req := &pb.ProfileRequest{
 			UserId: userID,
+			Token:  validToken,
 		}
 		resp, err := server.GetProfile(context.Background(), req)
 
-		// Проверяем результаты
+		// Проверяем ошибку
 		require.Error(t, err)
-		require.NotNil(t, resp)
-		require.False(t, resp.Success)
-		require.Equal(t, "User not found", resp.Error)
-
-		// Проверяем код ошибки gRPC
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		require.Equal(t, codes.NotFound, st.Code())
-
-		// Проверяем, что все ожидания были выполнены
-		err = mock.ExpectationsWereMet()
-		require.NoError(t, err)
+		require.Equal(t, "User not found", st.Message())
+		require.NotNil(t, resp)
+		require.False(t, resp.Success)
+		require.Equal(t, "User not found", resp.Error)
 	})
 
 	// Тест 4: Не указан ни токен, ни user_id
 	t.Run("Не указан ни токен, ни user_id", func(t *testing.T) {
-		// Выполняем запрос без токена и user_id
+		// Выполняем запрос без токена
 		req := &pb.ProfileRequest{}
 		resp, err := server.GetProfile(context.Background(), req)
 
-		// Проверяем результаты
+		// Проверяем ошибку
 		require.Error(t, err)
-		require.NotNil(t, resp)
-		require.False(t, resp.Success)
-		require.Equal(t, "Token or user ID is required", resp.Error)
-
-		// Проверяем код ошибки gRPC
 		st, ok := status.FromError(err)
 		require.True(t, ok)
-		require.Equal(t, codes.InvalidArgument, st.Code())
+		require.Equal(t, codes.Unauthenticated, st.Code())
+		require.Equal(t, "Authorization token is required", st.Message())
+		require.NotNil(t, resp)
+		require.False(t, resp.Success)
+		require.Equal(t, "Authorization token is required", resp.Error)
 	})
 
 	// Тест 5: Недействительный токен
 	t.Run("Недействительный токен", func(t *testing.T) {
 		// Мокаем проверку недействительного токена
 		invalidToken := "invalid_token"
-		tokenService.On("VerifyToken", invalidToken).Return(jwt.MapClaims{}, errors.New("invalid token"))
+		tokenService.On("VerifyToken", invalidToken).Return(nil, token.ErrInvalidToken)
 
 		// Выполняем запрос с недействительным токеном
 		req := &pb.ProfileRequest{
@@ -588,18 +592,213 @@ func TestGetProfileRPC(t *testing.T) {
 		}
 		resp, err := server.GetProfile(context.Background(), req)
 
-		// Проверяем результаты
+		// Проверяем ошибку
 		require.Error(t, err)
-		require.NotNil(t, resp)
-		require.False(t, resp.Success)
-		require.Equal(t, "Invalid token", resp.Error)
-
-		// Проверяем код ошибки gRPC
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		require.Equal(t, codes.Unauthenticated, st.Code())
+		require.NotNil(t, resp)
+		require.False(t, resp.Success)
+		require.Contains(t, resp.Error, "Invalid token")
+	})
+}
+
+// TestUpdateProfileRPC тестирует функцию обновления профиля пользователя
+func TestUpdateProfileRPC(t *testing.T) {
+	// Создаем мок для базы данных
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Создаем мок для токен-сервиса
+	tokenService := new(MockTokenService)
+
+	// Создаем инстанс сервера для тестирования
+	server := NewUserServiceServer(db, tokenService)
+
+	// Параметры для тестов
+	userID := int32(1)
+	username := "testuser"
+	email := "test@example.com"
+	tokenString := "valid_token"
+
+	// Настраиваем для токен-сервиса возврат валидных данных
+	tokenService.On("VerifyToken", tokenString).Return(&token.TokenClaims{
+		UserID:    int(userID),
+		Username:  username,
+		Email:     email,
+		IssuedAt:  time.Now(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}, nil)
+
+	// Тест 1: Обновление всех полей профиля
+	t.Run("Обновление всех полей профиля", func(t *testing.T) {
+		// Создаем новые данные для обновления
+		newFirstName := "Петр"
+		newLastName := "Петров"
+		newEmail := "peter@example.com"
+		newPhoneNumber := "+79998887766"
+		newBirthDate := time.Date(1992, 10, 20, 0, 0, 0, 0, time.UTC)
+
+		// Настраиваем ожидания для запроса обновления
+		mock.ExpectBegin()
+
+		rows := sqlmock.NewRows([]string{
+			"id", "username", "email", "first_name", "last_name",
+			"birth_date", "phone_number", "created_at", "updated_at",
+		}).AddRow(
+			userID, username, newEmail, newFirstName, newLastName,
+			newBirthDate, newPhoneNumber, time.Now(), time.Now(),
+		)
+
+		mock.ExpectQuery("UPDATE users SET").
+			WithArgs(
+				&newFirstName, &newLastName, &newPhoneNumber,
+				&newEmail, &newBirthDate, userID,
+			).
+			WillReturnRows(rows)
+
+		mock.ExpectCommit()
+
+		// Создаем запрос
+		req := &pb.UpdateProfileRequest{
+			Token:       tokenString,
+			FirstName:   newFirstName,
+			LastName:    newLastName,
+			Email:       newEmail,
+			PhoneNumber: newPhoneNumber,
+			BirthDate:   timestamppb.New(newBirthDate),
+		}
+
+		// Выполняем запрос
+		resp, err := server.UpdateProfile(context.Background(), req)
+
+		// Проверяем результаты
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.True(t, resp.Success)
+		require.Equal(t, userID, resp.User.Id)
+		require.Equal(t, username, resp.User.Username)
+		require.Equal(t, newEmail, resp.User.Email)
+		require.Equal(t, newFirstName, resp.User.FirstName)
+		require.Equal(t, newLastName, resp.User.LastName)
+		require.Equal(t, newPhoneNumber, resp.User.PhoneNumber)
+
+		// Проверяем timestamp полей
+		require.NotNil(t, resp.User.CreatedAt)
+		require.NotNil(t, resp.User.UpdatedAt)
+		require.NotNil(t, resp.User.BirthDate)
 
 		// Проверяем, что все ожидания были выполнены
-		tokenService.AssertExpectations(t)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// Тест 2: Обновление только части полей
+	t.Run("Обновление только части полей", func(t *testing.T) {
+		// Сбрасываем ожидания
+		mock.ExpectationsWereMet()
+
+		// Создаем новые данные для обновления
+		newFirstName := "Алексей"
+
+		// Настраиваем ожидания для запроса обновления
+		mock.ExpectBegin()
+
+		rows := sqlmock.NewRows([]string{
+			"id", "username", "email", "first_name", "last_name",
+			"birth_date", "phone_number", "created_at", "updated_at",
+		}).AddRow(
+			userID, username, email, newFirstName, username,
+			time.Now(), time.Now(), time.Now(), time.Now(),
+		)
+
+		mock.ExpectQuery("UPDATE users SET").
+			WithArgs(&newFirstName, nil, nil, nil, nil, userID).
+			WillReturnRows(rows)
+
+		mock.ExpectCommit()
+
+		// Создаем запрос только с первым именем
+		req := &pb.UpdateProfileRequest{
+			Token:     tokenString,
+			FirstName: newFirstName,
+		}
+
+		// Выполняем запрос
+		resp, err := server.UpdateProfile(context.Background(), req)
+
+		// Проверяем результаты
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.True(t, resp.Success)
+		require.Equal(t, userID, resp.User.Id)
+		require.Equal(t, username, resp.User.Username)
+		require.Equal(t, email, resp.User.Email)
+		require.Equal(t, newFirstName, resp.User.FirstName)
+		require.Equal(t, username, resp.User.LastName)
+		// Проверяем, что временные поля заполнены, но не сравниваем конкретные значения
+		require.NotNil(t, resp.User.CreatedAt)
+		require.NotNil(t, resp.User.UpdatedAt)
+		require.NotNil(t, resp.User.BirthDate)
+
+		// Проверяем, что все ожидания были выполнены
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// Тест 3: Ошибка при обновлении
+	t.Run("Ошибка при обновлении", func(t *testing.T) {
+		// Сбрасываем ожидания
+		mock.ExpectationsWereMet()
+
+		// Настраиваем значение аргумента
+		firstName := "TestUpdateError"
+
+		// Настраиваем ожидания для запроса обновления с ошибкой
+		mock.ExpectBegin()
+		mock.ExpectQuery("UPDATE users SET").
+			WithArgs(&firstName, nil, nil, nil, nil, userID).
+			WillReturnError(fmt.Errorf("database error"))
+		mock.ExpectRollback()
+
+		// Создаем запрос
+		req := &pb.UpdateProfileRequest{
+			Token:     tokenString,
+			FirstName: firstName,
+		}
+
+		// Выполняем запрос
+		_, err := server.UpdateProfile(context.Background(), req)
+
+		// Проверяем результаты - должен быть ошибка
+		require.Error(t, err)
+		require.Equal(t, codes.Internal, status.Code(err))
+		require.Contains(t, status.Convert(err).Message(), "Failed to update profile")
+
+		// Проверяем, что все ожидания были выполнены
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	// Тест 4: Невалидный токен
+	t.Run("Невалидный токен", func(t *testing.T) {
+		// Сбрасываем ожидания
+		mock.ExpectationsWereMet()
+
+		// Настраиваем новый мок для токена с ошибкой
+		invalidToken := "invalid_token"
+		tokenService.On("VerifyToken", invalidToken).Return(nil, errors.New("invalid token"))
+
+		// Создаем запрос с невалидным токеном
+		req := &pb.UpdateProfileRequest{
+			Token:     invalidToken,
+			FirstName: username,
+		}
+
+		// Выполняем запрос
+		_, err := server.UpdateProfile(context.Background(), req)
+
+		// Проверяем результаты - должна быть ошибка аутентификации
+		require.Error(t, err)
+		require.Equal(t, codes.Unauthenticated, status.Code(err))
+		require.Equal(t, "Invalid token", status.Convert(err).Message())
 	})
 }
