@@ -70,6 +70,23 @@ curl -X POST http://localhost:8080/api/login \
 }
 ```
 
+3.
+```
+export TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjozLCJ1c2VybmFtZSI6InRlc3R1c2VyMiIsImVtYWlsIjoidGVzdDJAZXhhbXBsZS5jb20iLCJpc3MiOiJ1c2VyLXNlcnZpY2UiLCJzdWIiOiIzIiwiZXhwIjoxNzQxMDg2MzQzLCJuYmYiOjE3NDA5OTk5NDMsImlhdCI6MTc0MDk5OTk0M30.9R92VbXz6JSt6RlCiHRLIQCAS1PLurizEygUCst5QX4"
+```
+
+```
+curl -X GET http://localhost:8080/api/profile \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+```
+curl -X PUT http://localhost:8080/api/update-profile -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" -d '{"first_name": "Иван", "last_name": "Петров", "phone_number": "+7 900 123-45-67"}'
+```
+
+```
+curl -X GET http://localhost:8080/api/profile -H "Authorization: Bearer $TOKEN"
+```
 ## Остановка сервиса
 
 ```bash

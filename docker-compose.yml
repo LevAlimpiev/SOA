@@ -51,7 +51,7 @@ services:
     depends_on:
       - user-service
     environment:
-      USER_SERVICE_GRPC: user-service:50051
+      USER_SERVICE_ADDR: user-service:50051
       PORT: 8080
     ports:
       - "8080:8080"
