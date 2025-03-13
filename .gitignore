@@ -1,27 +1,84 @@
-# Dependencies
+# Зависимости
+node_modules
 node_modules/
+**/node_modules
+**/node_modules/
+**/node_modules/**
+node_modules/**/*.d.ts
+**/node_modules/**/*.d.ts
+/vendor/
+/go.work
+/.go/
+/.cache/
+
+# Бинарные файлы и исполняемые файлы
+*
+!*/
+!*.*
+# Явно указываем, что node_modules должны игнорироваться несмотря на правило !*.*
+node_modules/**
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/user-service/user-service
+/api-gateway/api-gateway
+
+# Сгенерированные файлы
+*.pb.go
+
+# Временные файлы
+*.tmp
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Локальные конфиги и секреты
+.env
+*.local
+*.env.local
+*.env.development.local
+*.env.test.local
+*.env.production.local
+
+# Файлы IDE и редакторов
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.settings
+*.iml
+*.ipr
+*.iws
+
+# Логи
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Артефакты Docker
+.docker/
+docker-compose.override.yml
+
+# Временные файлы тестов и покрытия
+coverage/
+coverage.txt
+profile.out
+__debug_bin
 
 # Build outputs
 */doc/site/
 */doc/diagrams/
 
-# IDE files
-.idea/
-.vscode/
-*.iml
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Config files
-
+# Файлы конфигурации
 postcss.config.js
 package.json
 .likec4rc
