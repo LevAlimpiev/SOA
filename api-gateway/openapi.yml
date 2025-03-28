@@ -149,6 +149,200 @@ paths:
               schema:
                 type: string
                 example: "User not found"
+  /api/posts:
+    post:
+      summary: Создание нового поста
+      description: Создает новый пост от имени аутентифицированного пользователя
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePostRequest'
+      security:
+        - bearerAuth: []
+      responses:
+        '201':
+          description: Пост успешно создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
+        '400':
+          description: Некорректные данные запроса
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Invalid request data"
+        '401':
+          description: Отсутствует токен авторизации
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Authorization token required"
+    get:
+      summary: Получение списка постов
+      description: Возвращает список постов с пагинацией и фильтрацией
+      parameters:
+        - name: page
+          in: query
+          description: Номер страницы (начиная с 1)
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          description: Количество постов на странице
+          required: false
+          schema:
+            type: integer
+            default: 10
+        - name: creator_id
+          in: query
+          description: ID автора постов (фильтр)
+          required: false
+          schema:
+            type: integer
+        - name: tags
+          in: query
+          description: Фильтр по тегам, разделенных запятыми
+          required: false
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - {}  # позволяет неавторизованный доступ
+      responses:
+        '200':
+          description: Список постов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListPostsResponse'
+        '400':
+          description: Некорректные параметры запроса
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Invalid query parameters"
+  /api/posts/{id}:
+    parameters:
+      - name: id
+        in: path
+        description: ID поста
+        required: true
+        schema:
+          type: integer
+    get:
+      summary: Получение поста по ID
+      description: Возвращает информацию о конкретном посте
+      security:
+        - bearerAuth: []
+        - {}  # позволяет неавторизованный доступ
+      responses:
+        '200':
+          description: Пост найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
+        '404':
+          description: Пост не найден
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Post not found"
+        '403':
+          description: Доступ запрещен (для приватных постов)
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Access denied"
+    put:
+      summary: Обновление поста
+      description: Обновляет информацию о посте (только автор может обновить свой пост)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePostRequest'
+      responses:
+        '200':
+          description: Пост успешно обновлен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
+        '400':
+          description: Некорректные данные запроса
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Invalid request data"
+        '401':
+          description: Отсутствует токен авторизации
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Authorization token required"
+        '403':
+          description: Доступ запрещен (попытка редактировать чужой пост)
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Access denied"
+        '404':
+          description: Пост не найден
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Post not found"
+    delete:
+      summary: Удаление поста
+      description: Удаляет пост (только автор может удалить свой пост)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Пост успешно удален
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletePostResponse'
+        '401':
+          description: Отсутствует токен авторизации
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Authorization token required"
+        '403':
+          description: Доступ запрещен (попытка удалить чужой пост)
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Access denied"
+        '404':
+          description: Пост не найден
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Post not found"
 components:
   schemas:
     RegisterRequest:
@@ -264,6 +458,111 @@ components:
           type: string
           format: date-time
           description: Дата последнего обновления профиля
+    CreatePostRequest:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          description: Заголовок поста
+        description:
+          type: string
+          description: Описание или содержание поста
+        is_private:
+          type: boolean
+          description: Флаг, указывающий, является ли пост приватным
+          default: false
+        tags:
+          type: array
+          description: Список тегов поста
+          items:
+            type: string
+    UpdatePostRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          description: Новый заголовок поста
+        description:
+          type: string
+          description: Новое описание или содержание поста
+        is_private:
+          type: boolean
+          description: Новый статус приватности поста
+        tags:
+          type: array
+          description: Новый список тегов поста
+          items:
+            type: string
+    Post:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Уникальный идентификатор поста
+        creator_id:
+          type: integer
+          description: ID автора поста
+        title:
+          type: string
+          description: Заголовок поста
+        description:
+          type: string
+          description: Описание или содержание поста
+        created_at:
+          type: string
+          format: date-time
+          description: Дата создания поста
+        updated_at:
+          type: string
+          format: date-time
+          description: Дата последнего обновления поста
+        is_private:
+          type: boolean
+          description: Флаг, указывающий, является ли пост приватным
+        tags:
+          type: array
+          description: Список тегов поста
+          items:
+            type: string
+    PostResponse:
+      type: object
+      properties:
+        post:
+          $ref: '#/components/schemas/Post'
+        success:
+          type: boolean
+          description: Флаг успешного выполнения операции
+        error:
+          type: string
+          description: Описание ошибки (при наличии)
+    DeletePostResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Флаг успешного выполнения операции
+        error:
+          type: string
+          description: Описание ошибки (при наличии)
+    ListPostsResponse:
+      type: object
+      properties:
+        posts:
+          type: array
+          description: Список постов
+          items:
+            $ref: '#/components/schemas/Post'
+        total_count:
+          type: integer
+          description: Общее количество постов, соответствующих фильтрам
+        success:
+          type: boolean
+          description: Флаг успешного выполнения операции
+        error:
+          type: string
+          description: Описание ошибки (при наличии)
   securitySchemes:
     bearerAuth:
       type: http

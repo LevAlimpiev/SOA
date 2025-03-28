@@ -22,6 +22,7 @@ func main() {
 	// Get environment variables
 	port := getEnv("PORT", "8080")
 	userServiceAddr := getEnv("USER_SERVICE_ADDR", "localhost:50051")
+	postServiceAddr := getEnv("POST_SERVICE_ADDR", "localhost:50052")
 
 	// Set up gRPC connection to the user service
 	var opts []grpc.DialOption
@@ -33,8 +34,15 @@ func main() {
 	}
 	defer conn.Close()
 
-	// Initialize gRPC client
+	// Initialize gRPC clients
 	InitGRPCClient(userServiceAddr)
+	
+	// Initialize Post service client
+	err = InitPostGRPCClient(postServiceAddr)
+	if err != nil {
+		log.Fatalf("Failed to initialize post service client: %v", err)
+	}
+	defer ClosePostGRPCClient()
 
 	// Create router and set up routes
 	r := mux.NewRouter()
@@ -269,8 +277,12 @@ func handleGRPCError(w http.ResponseWriter, err error) {
 
 // setupRoutes настраивает HTTP маршруты для API gateway
 func setupRoutes(router *mux.Router) {
+	// Маршруты для пользователей
 	router.HandleFunc("/api/register", registerHandler).Methods("POST")
 	router.HandleFunc("/api/login", loginHandler).Methods("POST")
 	router.HandleFunc("/api/profile", profileHandler).Methods("GET")
 	router.HandleFunc("/api/update-profile", updateProfileHandler).Methods("PUT")
+
+	// Регистрируем маршруты для постов
+	RegisterPostHandlers(router)
 }

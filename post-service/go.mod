@@ -1,14 +1,10 @@
-module github.com/levalimpiev/service_oriented_architectures/api-gateway
+module github.com/levalimpiev/service_oriented_architectures/post-service
 
 go 1.21
 
-toolchain go1.24.0
-
 require (
-	github.com/dgrijalva/jwt-go v3.2.0+incompatible
-	github.com/gorilla/mux v1.8.0
 	github.com/levalimpiev/service_oriented_architectures/proto/post v0.0.0
-	github.com/levalimpiev/service_oriented_architectures/proto/user v0.0.0
+	github.com/lib/pq v1.10.9
 	github.com/stretchr/testify v1.8.4
 	google.golang.org/grpc v1.59.0
 	google.golang.org/protobuf v1.31.0
@@ -25,7 +21,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20230822172742-b8732ec3820d // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/levalimpiev/service_oriented_architectures/proto/user => ../proto/user
 
 replace github.com/levalimpiev/service_oriented_architectures/proto/post => ../proto/post

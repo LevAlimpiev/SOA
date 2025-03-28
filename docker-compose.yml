@@ -21,6 +21,26 @@ services:
       timeout: 5s
       retries: 5
 
+  post-db:
+    image: postgres:14-alpine
+    container_name: post-service-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: post_service
+    volumes:
+      - post_db_data:/var/lib/postgresql/data
+      - ./post-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5433:5432"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   user-service:
     build:
       context: .
@@ -43,6 +63,26 @@ services:
     networks:
       - app-network
 
+  post-service:
+    build:
+      context: .
+      dockerfile: post-service/Dockerfile
+    container_name: post-service
+    depends_on:
+      post-db:
+        condition: service_healthy
+    environment:
+      DB_HOST: post-db
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: post_service
+      PORT: 50052
+    ports:
+      - "50052:50052"
+    networks:
+      - app-network
+
   api-gateway:
     build:
       context: .
@@ -50,9 +90,12 @@ services:
     container_name: api-gateway
     depends_on:
       - user-service
+      - post-service
     environment:
       USER_SERVICE_ADDR: user-service:50051
+      POST_SERVICE_ADDR: post-service:50052
       PORT: 8080
+      JWT_SECRET: ${JWT_SECRET:-your-secret-key-here}
     ports:
       - "8080:8080"
     networks:
@@ -68,6 +111,7 @@ services:
     depends_on:
       - api-gateway
       - user-service
+      - post-service
       - postgres
     profiles:
       - test
@@ -78,3 +122,4 @@ networks:
 
 volumes:
   postgres_data:
+  post_db_data:

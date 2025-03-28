@@ -1,0 +1,128 @@
+syntax = "proto3";
+
+package post;
+
+option go_package = "github.com/levalimpiev/service_oriented_architectures/proto/post";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+// Сервис для работы с постами
+service PostService {
+  // Создание нового поста
+  rpc CreatePost(CreatePostRequest) returns (PostResponse) {}
+  
+  // Получение поста по ID
+  rpc GetPostById(PostIdRequest) returns (PostResponse) {}
+  
+  // Обновление поста
+  rpc UpdatePost(UpdatePostRequest) returns (PostResponse) {}
+  
+  // Удаление поста
+  rpc DeletePost(PostIdRequest) returns (DeletePostResponse) {}
+  
+  // Получение списка постов с пагинацией
+  rpc ListPosts(ListPostsRequest) returns (ListPostsResponse) {}
+}
+
+// Запрос на создание поста
+message CreatePostRequest {
+  // ID создателя поста
+  int32 creator_id = 1;
+  // Название поста
+  string title = 2;
+  // Описание поста
+  string description = 3;
+  // Приватность поста (если true, то доступен только создателю)
+  bool is_private = 4;
+  // Список тегов поста
+  repeated string tags = 5;
+}
+
+// Запрос на обновление поста
+message UpdatePostRequest {
+  // ID поста
+  int32 post_id = 1;
+  // ID создателя (для авторизации)
+  int32 creator_id = 2;
+  // Новое название поста (опционально)
+  optional string title = 3;
+  // Новое описание поста (опционально)
+  optional string description = 4;
+  // Приватность поста (опционально)
+  optional bool is_private = 5;
+  // Новый список тегов (опционально)
+  repeated string tags = 6;
+}
+
+// Запрос на получение поста по ID
+message PostIdRequest {
+  // ID поста
+  int32 post_id = 1;
+  // ID пользователя (для проверки доступа)
+  int32 user_id = 2;
+}
+
+// Ответ на запрос удаления поста
+message DeletePostResponse {
+  // Успешность операции
+  bool success = 1;
+  // Сообщение об ошибке, если есть
+  string error = 2;
+}
+
+// Структура поста
+message Post {
+  // ID поста
+  int32 id = 1;
+  // ID создателя
+  int32 creator_id = 2;
+  // Название поста
+  string title = 3;
+  // Описание поста
+  string description = 4;
+  // Дата создания
+  google.protobuf.Timestamp created_at = 5;
+  // Дата обновления
+  google.protobuf.Timestamp updated_at = 6;
+  // Приватность поста
+  bool is_private = 7;
+  // Теги поста
+  repeated string tags = 8;
+}
+
+// Ответ, содержащий данные поста
+message PostResponse {
+  // Пост
+  Post post = 1;
+  // Успешность операции
+  bool success = 2;
+  // Сообщение об ошибке, если есть
+  string error = 3;
+}
+
+// Запрос на получение списка постов с пагинацией
+message ListPostsRequest {
+  // ID пользователя (для фильтрации приватных постов)
+  int32 user_id = 1;
+  // Номер страницы
+  int32 page = 2;
+  // Количество записей на странице
+  int32 page_size = 3;
+  // Фильтр по создателю (опционально)
+  optional int32 creator_id = 4;
+  // Фильтр по тегам (опционально)
+  repeated string tags = 5;
+}
+
+// Ответ со списком постов
+message ListPostsResponse {
+  // Список постов
+  repeated Post posts = 1;
+  // Общее количество постов
+  int32 total_count = 2;
+  // Успешность операции
+  bool success = 3;
+  // Сообщение об ошибке, если есть
+  string error = 4;
+} 
