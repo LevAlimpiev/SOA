@@ -207,4 +207,157 @@ func (s *PostServer) ListPosts(ctx context.Context, req *pb.ListPostsRequest) (*
 		TotalCount: totalCount,
 		Success:    true,
 	}, nil
-} 
+}
+
+// ViewPost регистрирует просмотр поста
+func (s *PostServer) ViewPost(ctx context.Context, req *pb.ViewPostRequest) (*pb.ViewPostResponse, error) {
+	// Проверка входных данных
+	if req.PostId == 0 {
+		return &pb.ViewPostResponse{
+			Success: false,
+			Error:   "ID поста не может быть пустым",
+		}, status.Error(codes.InvalidArgument, "ID поста не может быть пустым")
+	}
+
+	// Регистрируем просмотр через сервисный слой
+	err := s.service.ViewPost(req.PostId, req.UserId)
+	if err != nil {
+		errCode := codes.Internal
+		if err.Error() == "пост не найден" {
+			errCode = codes.NotFound
+		}
+
+		return &pb.ViewPostResponse{
+			Success: false,
+			Error:   err.Error(),
+		}, status.Error(errCode, err.Error())
+	}
+
+	return &pb.ViewPostResponse{
+		Success: true,
+	}, nil
+}
+
+// LikePost добавляет или удаляет лайк поста
+func (s *PostServer) LikePost(ctx context.Context, req *pb.LikePostRequest) (*pb.LikePostResponse, error) {
+	// Проверка входных данных
+	if req.PostId == 0 {
+		return &pb.LikePostResponse{
+			Success: false,
+			Error:   "ID поста не может быть пустым",
+		}, status.Error(codes.InvalidArgument, "ID поста не может быть пустым")
+	}
+
+	if req.UserId == 0 {
+		return &pb.LikePostResponse{
+			Success: false,
+			Error:   "ID пользователя не может быть пустым",
+		}, status.Error(codes.InvalidArgument, "ID пользователя не может быть пустым")
+	}
+
+	// Обрабатываем лайк через сервисный слой
+	err := s.service.LikePost(req.PostId, req.UserId)
+	if err != nil {
+		errCode := codes.Internal
+		if err.Error() == "пост не найден" {
+			errCode = codes.NotFound
+		} else if err.Error() == "доступ запрещен" {
+			errCode = codes.PermissionDenied
+		}
+
+		return &pb.LikePostResponse{
+			Success: false,
+			Error:   err.Error(),
+		}, status.Error(errCode, err.Error())
+	}
+
+	return &pb.LikePostResponse{
+		Success: true,
+	}, nil
+}
+
+// AddComment добавляет комментарий к посту
+func (s *PostServer) AddComment(ctx context.Context, req *pb.AddCommentRequest) (*pb.AddCommentResponse, error) {
+	// Проверка входных данных
+	if req.PostId == 0 {
+		return &pb.AddCommentResponse{
+			Success: false,
+			Error:   "ID поста не может быть пустым",
+		}, status.Error(codes.InvalidArgument, "ID поста не может быть пустым")
+	}
+
+	if req.UserId == 0 {
+		return &pb.AddCommentResponse{
+			Success: false,
+			Error:   "ID пользователя не может быть пустым",
+		}, status.Error(codes.InvalidArgument, "ID пользователя не может быть пустым")
+	}
+
+	if strings.TrimSpace(req.Text) == "" {
+		return &pb.AddCommentResponse{
+			Success: false,
+			Error:   "текст комментария не может быть пустым",
+		}, status.Error(codes.InvalidArgument, "текст комментария не может быть пустым")
+	}
+
+	// Добавляем комментарий через сервисный слой
+	comment, err := s.service.AddComment(req.PostId, req.UserId, req.Text)
+	if err != nil {
+		errCode := codes.Internal
+		if err.Error() == "пост не найден" {
+			errCode = codes.NotFound
+		}
+
+		return &pb.AddCommentResponse{
+			Success: false,
+			Error:   err.Error(),
+		}, status.Error(errCode, err.Error())
+	}
+
+	return &pb.AddCommentResponse{
+		Success: true,
+		Comment: comment,
+	}, nil
+}
+
+// GetComments возвращает список комментариев к посту
+func (s *PostServer) GetComments(ctx context.Context, req *pb.GetCommentsRequest) (*pb.GetCommentsResponse, error) {
+	// Проверка входных данных
+	if req.PostId == 0 {
+		return &pb.GetCommentsResponse{
+			Success: false,
+			Error:   "ID поста не может быть пустым",
+		}, status.Error(codes.InvalidArgument, "ID поста не может быть пустым")
+	}
+
+	// Устанавливаем значения пагинации по умолчанию, если они не указаны
+	page := req.Page
+	if page < 1 {
+		page = 1
+	}
+
+	pageSize := req.PageSize
+	if pageSize < 1 {
+		pageSize = 10
+	}
+
+	// Получаем комментарии через сервисный слой
+	comments, totalCount, err := s.service.GetComments(req.PostId, page, pageSize)
+	if err != nil {
+		errCode := codes.Internal
+		if err.Error() == "пост не найден" {
+			errCode = codes.NotFound
+		}
+
+		return &pb.GetCommentsResponse{
+			Success: false,
+			Error:   err.Error(),
+		}, status.Error(errCode, err.Error())
+	}
+
+	return &pb.GetCommentsResponse{
+		Comments:   comments,
+		TotalCount: totalCount,
+		Success:    true,
+	}, nil
+}

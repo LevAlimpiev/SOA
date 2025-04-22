@@ -3,7 +3,7 @@
 echo "Запуск сервисов с JWT-токенами..."
 
 # Остановка всех контейнеров
-docker-compose down
+docker-compose down -v
 
 # Экспорт переменных окружения для JWT
 export TOKEN_TYPE=jwt

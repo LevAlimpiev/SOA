@@ -18,6 +18,12 @@ func RegisterPostHandlers(router *mux.Router) {
 	router.Handle("/api/posts", authMiddleware(http.HandlerFunc(CreatePostHandler))).Methods("POST")
 	router.Handle("/api/posts/{id:[0-9]+}", authMiddleware(http.HandlerFunc(UpdatePostHandler))).Methods("PUT")
 	router.Handle("/api/posts/{id:[0-9]+}", authMiddleware(http.HandlerFunc(DeletePostHandler))).Methods("DELETE")
+
+	// Новые маршруты для просмотров, лайков и комментариев
+	router.Handle("/api/posts/{id:[0-9]+}/view", authMiddleware(http.HandlerFunc(viewPostHandler))).Methods("POST")
+	router.Handle("/api/posts/{id:[0-9]+}/like", authMiddleware(http.HandlerFunc(likePostHandler))).Methods("POST")
+	router.Handle("/api/posts/{id:[0-9]+}/comments", authMiddleware(http.HandlerFunc(addCommentHandler))).Methods("POST")
+	router.Handle("/api/posts/{id:[0-9]+}/comments", authMiddleware(http.HandlerFunc(getCommentsHandler))).Methods("GET")
 }
 
 // CreatePostHandler обрабатывает запрос на создание поста
@@ -264,4 +270,204 @@ func extractTags(tagsParam string) []string {
 	// Здесь можно добавить более сложную логику разбора тегов, если нужно
 	// В простейшем случае просто разделяем по запятой
 	return splitAndTrim(tagsParam, ",")
-} 
+}
+
+// Константы для контекста
+type contextKey string
+
+const userIDKey contextKey = "user_id"
+
+// viewPostHandler обрабатывает запрос на просмотр поста
+func viewPostHandler(w http.ResponseWriter, r *http.Request) {
+	// Получаем ID поста из URL
+	vars := mux.Vars(r)
+	postID, err := strconv.Atoi(vars["id"])
+	if err != nil {
+		http.Error(w, "некорректный ID поста", http.StatusBadRequest)
+		return
+	}
+
+	// Получаем ID пользователя из контекста
+	userID, ok := getUserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "требуется аутентификация", http.StatusUnauthorized)
+		return
+	}
+
+	// Вызываем gRPC метод
+	resp, err := ViewPost(r.Context(), int32(postID), userID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Проверяем результат
+	if !resp.Success {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ActionResponse{
+			Success: false,
+			Error:   resp.Error,
+		})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(ActionResponse{
+		Success: true,
+	})
+}
+
+// likePostHandler обрабатывает запрос на лайк/анлайк поста
+func likePostHandler(w http.ResponseWriter, r *http.Request) {
+	// Получаем ID поста из URL
+	vars := mux.Vars(r)
+	postID, err := strconv.Atoi(vars["id"])
+	if err != nil {
+		http.Error(w, "некорректный ID поста", http.StatusBadRequest)
+		return
+	}
+
+	// Получаем ID пользователя из контекста
+	userID, ok := getUserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "требуется аутентификация", http.StatusUnauthorized)
+		return
+	}
+
+	// Вызываем gRPC метод
+	resp, err := LikePost(r.Context(), int32(postID), userID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Проверяем результат
+	if !resp.Success {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ActionResponse{
+			Success: false,
+			Error:   resp.Error,
+		})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(ActionResponse{
+		Success: true,
+	})
+}
+
+// addCommentHandler обрабатывает запрос на добавление комментария к посту
+func addCommentHandler(w http.ResponseWriter, r *http.Request) {
+	// Получаем ID поста из URL
+	vars := mux.Vars(r)
+	postID, err := strconv.Atoi(vars["id"])
+	if err != nil {
+		http.Error(w, "некорректный ID поста", http.StatusBadRequest)
+		return
+	}
+
+	// Получаем ID пользователя из контекста
+	userID, ok := getUserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "требуется аутентификация", http.StatusUnauthorized)
+		return
+	}
+
+	// Парсим JSON запрос
+	var req AddCommentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Вызываем gRPC метод
+	resp, err := AddComment(r.Context(), int32(postID), userID, req.Text)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Проверяем результат
+	if !resp.Success {
+		http.Error(w, resp.Error, http.StatusBadRequest)
+		return
+	}
+
+	// Преобразуем комментарий из proto в REST формат
+	comment := CommentResponse{
+		ID:        resp.Comment.Id,
+		PostID:    resp.Comment.PostId,
+		UserID:    resp.Comment.UserId,
+		Username:  resp.Comment.Username,
+		Text:      resp.Comment.Text,
+		CreatedAt: resp.Comment.CreatedAt.AsTime(),
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(comment)
+}
+
+// getCommentsHandler обрабатывает запрос на получение комментариев к посту
+func getCommentsHandler(w http.ResponseWriter, r *http.Request) {
+	// Получаем ID поста из URL
+	vars := mux.Vars(r)
+	postID, err := strconv.Atoi(vars["id"])
+	if err != nil {
+		http.Error(w, "некорректный ID поста", http.StatusBadRequest)
+		return
+	}
+
+	// Получаем параметры пагинации из query-строки
+	query := r.URL.Query()
+	pageStr := query.Get("page")
+	page := 1
+	if pageStr != "" {
+		pageVal, err := strconv.Atoi(pageStr)
+		if err == nil && pageVal > 0 {
+			page = pageVal
+		}
+	}
+
+	pageSizeStr := query.Get("page_size")
+	pageSize := 10
+	if pageSizeStr != "" {
+		pageSizeVal, err := strconv.Atoi(pageSizeStr)
+		if err == nil && pageSizeVal > 0 {
+			pageSize = pageSizeVal
+		}
+	}
+
+	// Вызываем gRPC метод
+	resp, err := GetComments(r.Context(), int32(postID), int32(page), int32(pageSize))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Проверяем результат
+	if !resp.Success {
+		http.Error(w, resp.Error, http.StatusBadRequest)
+		return
+	}
+
+	// Преобразуем комментарии из proto в REST формат
+	comments := make([]CommentResponse, 0, len(resp.Comments))
+	for _, protoComment := range resp.Comments {
+		comment := CommentResponse{
+			ID:        protoComment.Id,
+			PostID:    protoComment.PostId,
+			UserID:    protoComment.UserId,
+			Username:  protoComment.Username,
+			Text:      protoComment.Text,
+			CreatedAt: protoComment.CreatedAt.AsTime(),
+		}
+		comments = append(comments, comment)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(CommentListResponse{
+		Comments:   comments,
+		TotalCount: resp.TotalCount,
+	})
+}

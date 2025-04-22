@@ -17,12 +17,12 @@ type CreatePostRequest struct {
 
 // UpdatePostRequest представляет запрос на обновление поста
 type UpdatePostRequest struct {
-	PostID      int32     `json:"post_id"`
-	CreatorID   int32     `json:"creator_id"`
-	Title       *string   `json:"title,omitempty"`
-	Description *string   `json:"description,omitempty"`
-	IsPrivate   *bool     `json:"is_private,omitempty"`
-	Tags        []string  `json:"tags"`
+	PostID      int32    `json:"post_id"`
+	CreatorID   int32    `json:"creator_id"`
+	Title       *string  `json:"title,omitempty"`
+	Description *string  `json:"description,omitempty"`
+	IsPrivate   *bool    `json:"is_private,omitempty"`
+	Tags        []string `json:"tags"`
 }
 
 // ListPostsRequest представляет запрос на получение списка постов
@@ -65,6 +65,33 @@ type ListPostsResponse struct {
 	TotalCount int32  `json:"total_count"`
 	Success    bool   `json:"success"`
 	Error      string `json:"error,omitempty"`
+}
+
+// CommentResponse представляет комментарий к посту
+type CommentResponse struct {
+	ID        int32     `json:"id"`
+	PostID    int32     `json:"post_id"`
+	UserID    int32     `json:"user_id"`
+	Username  string    `json:"username"`
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AddCommentRequest представляет запрос на добавление комментария
+type AddCommentRequest struct {
+	Text string `json:"text" binding:"required"`
+}
+
+// CommentListResponse представляет список комментариев с пагинацией
+type CommentListResponse struct {
+	Comments   []CommentResponse `json:"comments"`
+	TotalCount int32             `json:"total_count"`
+}
+
+// ActionResponse представляет результат действия (просмотр, лайк и т.д.)
+type ActionResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
 }
 
 // ConvertProtoPostToRESTPost преобразует пост из protobuf в REST модель
@@ -138,4 +165,4 @@ func ConvertProtoListResponseToRESTResponse(protoResponse *pb.ListPostsResponse)
 		Success:    protoResponse.Success,
 		Error:      protoResponse.Error,
 	}
-} 
+}

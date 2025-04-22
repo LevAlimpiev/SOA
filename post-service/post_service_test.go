@@ -2,18 +2,14 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"fmt"
-	"os"
+	"log"
 	"testing"
-	"time"
 
 	"github.com/levalimpiev/service_oriented_architectures/post-service/internal/db"
 	"github.com/levalimpiev/service_oriented_architectures/post-service/internal/server"
 	"github.com/levalimpiev/service_oriented_architectures/post-service/internal/service"
 	pb "github.com/levalimpiev/service_oriented_architectures/proto/post"
-	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -29,118 +25,6 @@ type PostServiceSuite struct {
 	service service.PostService
 	server  *server.PostServer
 	ctx     context.Context
-	dbConn  *sql.DB
-}
-
-// Инициализация подключения к базе данных для тестов
-func initTestDB() (*sql.DB, error) {
-	// Получаем параметры соединения из переменных окружения или используем значения по умолчанию для тестов
-	dbHost := getTestEnv("TEST_DB_HOST", "localhost")
-	dbPort := getTestEnv("TEST_DB_PORT", "5432")
-	dbUser := getTestEnv("TEST_DB_USER", "postgres")
-	dbPassword := getTestEnv("TEST_DB_PASSWORD", "postgres")
-	dbName := getTestEnv("TEST_DB_NAME", "post_service_test")
-
-	// Формируем строку подключения к PostgreSQL
-	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		dbHost, dbPort, dbUser, dbPassword, dbName)
-
-	// Открываем соединение
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка при открытии соединения с БД для тестов: %w", err)
-	}
-
-	// Устанавливаем параметры соединения
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(25)
-	db.SetConnMaxLifetime(5 * time.Minute)
-
-	// Проверяем соединение
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("ошибка при проверке соединения с БД для тестов: %w", err)
-	}
-
-	return db, nil
-}
-
-// getTestEnv получает значение переменной окружения или возвращает значение по умолчанию
-func getTestEnv(key, defaultValue string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
-	}
-	return defaultValue
-}
-
-// Инициализация схемы базы данных для тестов
-func initTestSchema(database *sql.DB) error {
-	// SQL для создания таблицы posts
-	createPostsTable := `
-    CREATE TABLE IF NOT EXISTS posts (
-        id SERIAL PRIMARY KEY,
-        creator_id INTEGER NOT NULL,
-        title VARCHAR(255) NOT NULL,
-        description TEXT,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        is_private BOOLEAN DEFAULT FALSE
-    );
-    `
-
-	// SQL для создания таблицы post_tags
-	createPostTagsTable := `
-    CREATE TABLE IF NOT EXISTS post_tags (
-        post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
-        tag VARCHAR(50) NOT NULL,
-        PRIMARY KEY (post_id, tag)
-    );
-    `
-
-	// Выполняем SQL запросы
-	_, err := database.Exec(createPostsTable)
-	if err != nil {
-		return fmt.Errorf("ошибка при создании таблицы posts: %w", err)
-	}
-
-	_, err = database.Exec(createPostTagsTable)
-	if err != nil {
-		return fmt.Errorf("ошибка при создании таблицы post_tags: %w", err)
-	}
-
-	// Создаем индексы
-	_, err = database.Exec("CREATE INDEX IF NOT EXISTS posts_creator_id_idx ON posts(creator_id);")
-	if err != nil {
-		return fmt.Errorf("ошибка при создании индекса posts_creator_id_idx: %w", err)
-	}
-
-	_, err = database.Exec("CREATE INDEX IF NOT EXISTS post_tags_tag_idx ON post_tags(tag);")
-	if err != nil {
-		return fmt.Errorf("ошибка при создании индекса post_tags_tag_idx: %w", err)
-	}
-
-	return nil
-}
-
-// Очистка таблиц перед каждым тестом
-func cleanupTables(database *sql.DB) error {
-	// Удаляем все данные из таблиц
-	_, err := database.Exec("DELETE FROM post_tags;")
-	if err != nil {
-		return fmt.Errorf("ошибка при очистке таблицы post_tags: %w", err)
-	}
-
-	_, err = database.Exec("DELETE FROM posts;")
-	if err != nil {
-		return fmt.Errorf("ошибка при очистке таблицы posts: %w", err)
-	}
-
-	// Сбрасываем sequence для ID
-	_, err = database.Exec("ALTER SEQUENCE posts_id_seq RESTART WITH 1;")
-	if err != nil {
-		return fmt.Errorf("ошибка при сбросе sequence posts_id_seq: %w", err)
-	}
-
-	return nil
 }
 
 // SetupSuite инициализирует все зависимости перед запуском тестов
@@ -149,6 +33,9 @@ func (s *PostServiceSuite) SetupSuite() {
 
 	// Создаем мок-репозиторий вместо подключения к базе данных
 	s.repo = db.NewMockPostRepository()
+	if s.repo == nil {
+		log.Fatalf("Не удалось создать мок-репозиторий")
+	}
 
 	// Создаём сервисный слой и gRPC сервер
 	s.service = service.NewPostService(s.repo)
@@ -394,6 +281,148 @@ func (s *PostServiceSuite) TestListPosts() {
 	assert.GreaterOrEqual(t, tagFilterResp.TotalCount, int32(2)) // Должно быть как минимум 2 поста с тегом "общий"
 }
 
+// TestViewPost проверяет регистрацию просмотра поста
+func (s *PostServiceSuite) TestViewPost() {
+	t := s.T()
+
+	// Создаем пост
+	createReq := &pb.CreatePostRequest{
+		CreatorId:   1,
+		Title:       "Пост для просмотра",
+		Description: "Описание поста для просмотра",
+		IsPrivate:   false,
+		Tags:        []string{"просмотр"},
+	}
+
+	createResp, err := s.server.CreatePost(s.ctx, createReq)
+	assert.NoError(t, err)
+	assert.True(t, createResp.Success)
+
+	// Регистрируем просмотр поста
+	viewerID := int32(2)
+	viewReq := &pb.ViewPostRequest{
+		PostId: createResp.Post.Id,
+		UserId: viewerID,
+	}
+
+	viewResp, err := s.server.ViewPost(s.ctx, viewReq)
+	assert.NoError(t, err)
+	assert.True(t, viewResp.Success)
+
+	// Проверяем повторный просмотр от того же пользователя
+	// (повторный просмотр не должен вызывать ошибку)
+	repeatViewResp, err := s.server.ViewPost(s.ctx, viewReq)
+	assert.NoError(t, err)
+	assert.True(t, repeatViewResp.Success)
+}
+
+// TestLikePost проверяет лайк и снятие лайка поста
+func (s *PostServiceSuite) TestLikePost() {
+	t := s.T()
+
+	// Создаем пост
+	creatorID := int32(1)
+	createReq := &pb.CreatePostRequest{
+		CreatorId:   creatorID,
+		Title:       "Пост для лайка",
+		Description: "Описание поста для лайка",
+		IsPrivate:   false,
+		Tags:        []string{"лайк"},
+	}
+
+	createResp, err := s.server.CreatePost(s.ctx, createReq)
+	assert.NoError(t, err)
+	assert.True(t, createResp.Success)
+
+	// Ставим лайк посту от другого пользователя
+	likerID := int32(2)
+	likeReq := &pb.LikePostRequest{
+		PostId: createResp.Post.Id,
+		UserId: likerID,
+	}
+
+	likeResp, err := s.server.LikePost(s.ctx, likeReq)
+	assert.NoError(t, err)
+	assert.True(t, likeResp.Success)
+
+	// Снимаем лайк (повторный вызов метода должен снять лайк)
+	unlikeResp, err := s.server.LikePost(s.ctx, likeReq)
+	assert.NoError(t, err)
+	assert.True(t, unlikeResp.Success)
+
+	// Собственный лайк поста
+	selfLikeReq := &pb.LikePostRequest{
+		PostId: createResp.Post.Id,
+		UserId: creatorID,
+	}
+
+	selfLikeResp, err := s.server.LikePost(s.ctx, selfLikeReq)
+	assert.NoError(t, err)
+	assert.True(t, selfLikeResp.Success)
+}
+
+// TestAddAndGetComments проверяет добавление и получение комментариев
+func (s *PostServiceSuite) TestAddAndGetComments() {
+	t := s.T()
+
+	// Создаем пост
+	createReq := &pb.CreatePostRequest{
+		CreatorId:   1,
+		Title:       "Пост для комментариев",
+		Description: "Описание поста для комментариев",
+		IsPrivate:   false,
+		Tags:        []string{"комментарий"},
+	}
+
+	createResp, err := s.server.CreatePost(s.ctx, createReq)
+	assert.NoError(t, err)
+	assert.True(t, createResp.Success)
+
+	// Добавляем первый комментарий
+	commenterID1 := int32(2)
+	comment1 := "Это первый комментарий"
+	addCommentReq1 := &pb.AddCommentRequest{
+		PostId: createResp.Post.Id,
+		UserId: commenterID1,
+		Text:   comment1,
+	}
+
+	addCommentResp1, err := s.server.AddComment(s.ctx, addCommentReq1)
+	assert.NoError(t, err)
+	assert.True(t, addCommentResp1.Success)
+	assert.Equal(t, comment1, addCommentResp1.Comment.Text)
+	assert.Equal(t, commenterID1, addCommentResp1.Comment.UserId)
+
+	// Добавляем второй комментарий от другого пользователя
+	commenterID2 := int32(3)
+	comment2 := "Это второй комментарий"
+	addCommentReq2 := &pb.AddCommentRequest{
+		PostId: createResp.Post.Id,
+		UserId: commenterID2,
+		Text:   comment2,
+	}
+
+	addCommentResp2, err := s.server.AddComment(s.ctx, addCommentReq2)
+	assert.NoError(t, err)
+	assert.True(t, addCommentResp2.Success)
+
+	// Получаем комментарии
+	getCommentsReq := &pb.GetCommentsRequest{
+		PostId:   createResp.Post.Id,
+		Page:     1,
+		PageSize: 10,
+	}
+
+	getCommentsResp, err := s.server.GetComments(s.ctx, getCommentsReq)
+	assert.NoError(t, err)
+	assert.True(t, getCommentsResp.Success)
+	assert.GreaterOrEqual(t, len(getCommentsResp.Comments), 2)
+
+	// Проверяем, что комментарии в порядке от новых к старым
+	assert.Equal(t, comment2, getCommentsResp.Comments[0].Text)
+	assert.Equal(t, comment1, getCommentsResp.Comments[1].Text)
+}
+
 // Запуск интеграционных тестов
 func TestPostService(t *testing.T) {
 	suite.Run(t, new(PostServiceSuite))
@@ -441,6 +470,36 @@ func (m *MockPostService) ListPosts(userID int32, page, pageSize int32, creatorI
 		return nil, int32(0), args.Error(2)
 	}
 	return args.Get(0).([]*pb.Post), args.Get(1).(int32), args.Error(2)
+}
+
+// ViewPost реализация мока для просмотра поста
+func (m *MockPostService) ViewPost(postID, userID int32) error {
+	args := m.Called(postID, userID)
+	return args.Error(0)
+}
+
+// LikePost реализация мока для лайка поста
+func (m *MockPostService) LikePost(postID, userID int32) error {
+	args := m.Called(postID, userID)
+	return args.Error(0)
+}
+
+// AddComment реализация мока для добавления комментария
+func (m *MockPostService) AddComment(postID, userID int32, text string) (*pb.Comment, error) {
+	args := m.Called(postID, userID, text)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*pb.Comment), args.Error(1)
+}
+
+// GetComments реализация мока для получения комментариев
+func (m *MockPostService) GetComments(postID int32, page, pageSize int32) ([]*pb.Comment, int32, error) {
+	args := m.Called(postID, page, pageSize)
+	if args.Get(0) == nil {
+		return nil, args.Get(1).(int32), args.Error(2)
+	}
+	return args.Get(0).([]*pb.Comment), args.Get(1).(int32), args.Error(2)
 }
 
 // Вспомогательная функция для создания тестовых постов
@@ -831,4 +890,205 @@ func TestPostServer_ListPostsUnit(t *testing.T) {
 	assert.Equal(t, tagFilteredCount, respWithTags.TotalCount)
 	assert.Equal(t, tagFilteredPosts, respWithTags.Posts)
 	mockService.AssertExpectations(t)
+}
+
+// TestPostServer_ViewPostUnit тестирует функцию ViewPost unit-тестами
+func TestPostServer_ViewPostUnit(t *testing.T) {
+	mockService := new(MockPostService)
+	server := server.NewPostServer(mockService)
+
+	ctx := context.Background()
+	postID := int32(1)
+	userID := int32(2)
+
+	// Настраиваем поведение мока сервиса
+	mockService.On("ViewPost", postID, userID).Return(nil)
+
+	// Создаем запрос
+	req := &pb.ViewPostRequest{
+		PostId: postID,
+		UserId: userID,
+	}
+
+	// Вызываем метод сервера
+	resp, err := server.ViewPost(ctx, req)
+
+	// Проверяем результаты
+	assert.NoError(t, err)
+	assert.True(t, resp.Success)
+	mockService.AssertExpectations(t)
+
+	// Тест с ошибкой "пост не найден"
+	mockService.On("ViewPost", int32(999), userID).Return(errors.New("пост не найден"))
+
+	notFoundReq := &pb.ViewPostRequest{
+		PostId: 999,
+		UserId: userID,
+	}
+
+	resp, err = server.ViewPost(ctx, notFoundReq)
+	assert.Error(t, err)
+	assert.False(t, resp.Success)
+	assert.Equal(t, "пост не найден", resp.Error)
+	statusErr, _ := status.FromError(err)
+	assert.Equal(t, codes.NotFound, statusErr.Code())
+}
+
+// TestPostServer_LikePostUnit тестирует функцию LikePost unit-тестами
+func TestPostServer_LikePostUnit(t *testing.T) {
+	mockService := new(MockPostService)
+	server := server.NewPostServer(mockService)
+
+	ctx := context.Background()
+	postID := int32(1)
+	userID := int32(2)
+
+	// Настраиваем поведение мока сервиса
+	mockService.On("LikePost", postID, userID).Return(nil)
+
+	// Создаем запрос
+	req := &pb.LikePostRequest{
+		PostId: postID,
+		UserId: userID,
+	}
+
+	// Вызываем метод сервера
+	resp, err := server.LikePost(ctx, req)
+
+	// Проверяем результаты
+	assert.NoError(t, err)
+	assert.True(t, resp.Success)
+	mockService.AssertExpectations(t)
+
+	// Тест с ошибкой доступа
+	mockService.On("LikePost", postID, int32(999)).Return(errors.New("доступ запрещен"))
+
+	accessErrorReq := &pb.LikePostRequest{
+		PostId: postID,
+		UserId: 999,
+	}
+
+	resp, err = server.LikePost(ctx, accessErrorReq)
+	assert.Error(t, err)
+	assert.False(t, resp.Success)
+	assert.Equal(t, "доступ запрещен", resp.Error)
+	statusErr, _ := status.FromError(err)
+	assert.Equal(t, codes.PermissionDenied, statusErr.Code())
+}
+
+// TestPostServer_AddCommentUnit тестирует функцию AddComment unit-тестами
+func TestPostServer_AddCommentUnit(t *testing.T) {
+	mockService := new(MockPostService)
+	server := server.NewPostServer(mockService)
+
+	ctx := context.Background()
+	postID := int32(1)
+	userID := int32(2)
+	text := "Тестовый комментарий"
+
+	// Создаем ожидаемый комментарий
+	expectedComment := &pb.Comment{
+		Id:        1,
+		PostId:    postID,
+		UserId:    userID,
+		Text:      text,
+		Username:  "test_user",
+		CreatedAt: timestamppb.Now(),
+	}
+
+	// Настраиваем поведение мока сервиса
+	mockService.On("AddComment", postID, userID, text).Return(expectedComment, nil)
+
+	// Создаем запрос
+	req := &pb.AddCommentRequest{
+		PostId: postID,
+		UserId: userID,
+		Text:   text,
+	}
+
+	// Вызываем метод сервера
+	resp, err := server.AddComment(ctx, req)
+
+	// Проверяем результаты
+	assert.NoError(t, err)
+	assert.True(t, resp.Success)
+	assert.Equal(t, expectedComment, resp.Comment)
+	mockService.AssertExpectations(t)
+
+	// Тест с пустым текстом комментария
+	emptyTextReq := &pb.AddCommentRequest{
+		PostId: postID,
+		UserId: userID,
+		Text:   "",
+	}
+
+	resp, err = server.AddComment(ctx, emptyTextReq)
+	assert.Error(t, err)
+	assert.False(t, resp.Success)
+	assert.Equal(t, "текст комментария не может быть пустым", resp.Error)
+}
+
+// TestPostServer_GetCommentsUnit тестирует функцию GetComments unit-тестами
+func TestPostServer_GetCommentsUnit(t *testing.T) {
+	mockService := new(MockPostService)
+	server := server.NewPostServer(mockService)
+
+	ctx := context.Background()
+	postID := int32(1)
+	page := int32(1)
+	pageSize := int32(10)
+	totalCount := int32(2)
+
+	// Создаем ожидаемые комментарии
+	expectedComments := []*pb.Comment{
+		{
+			Id:        1,
+			PostId:    postID,
+			UserId:    2,
+			Text:      "Комментарий 1",
+			Username:  "user1",
+			CreatedAt: timestamppb.Now(),
+		},
+		{
+			Id:        2,
+			PostId:    postID,
+			UserId:    3,
+			Text:      "Комментарий 2",
+			Username:  "user2",
+			CreatedAt: timestamppb.Now(),
+		},
+	}
+
+	// Настраиваем поведение мока сервиса
+	mockService.On("GetComments", postID, page, pageSize).Return(expectedComments, totalCount, nil)
+
+	// Создаем запрос
+	req := &pb.GetCommentsRequest{
+		PostId:   postID,
+		Page:     page,
+		PageSize: pageSize,
+	}
+
+	// Вызываем метод сервера
+	resp, err := server.GetComments(ctx, req)
+
+	// Проверяем результаты
+	assert.NoError(t, err)
+	assert.True(t, resp.Success)
+	assert.Equal(t, expectedComments, resp.Comments)
+	assert.Equal(t, totalCount, resp.TotalCount)
+	mockService.AssertExpectations(t)
+
+	// Тест с нулевыми значениями пагинации (должны быть установлены значения по умолчанию)
+	mockService.On("GetComments", postID, int32(1), int32(10)).Return(expectedComments, totalCount, nil)
+
+	zeroPaginationReq := &pb.GetCommentsRequest{
+		PostId:   postID,
+		Page:     0,
+		PageSize: 0,
+	}
+
+	resp, err = server.GetComments(ctx, zeroPaginationReq)
+	assert.NoError(t, err)
+	assert.True(t, resp.Success)
 }

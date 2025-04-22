@@ -36,7 +36,7 @@ func main() {
 
 	// Initialize gRPC clients
 	InitGRPCClient(userServiceAddr)
-	
+
 	// Initialize Post service client
 	err = InitPostGRPCClient(postServiceAddr)
 	if err != nil {

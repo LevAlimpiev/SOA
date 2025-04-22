@@ -14,6 +14,12 @@ type PostRepository interface {
 	Update(postID, creatorID int32, title, description *string, isPrivate *bool, tags []string) (*pb.Post, error)
 	Delete(postID, userID int32) error
 	List(userID int32, page, pageSize int32, creatorID *int32, tags []string) ([]*pb.Post, int32, error)
+
+	// Новые методы
+	ViewPost(postID, userID int32) error
+	LikePost(postID, userID int32) error
+	AddComment(postID, userID int32, text string) (*pb.Comment, error)
+	GetComments(postID int32, page, pageSize int32) ([]*pb.Comment, int32, error)
 }
 
 // NewPostRepository создает новый репозиторий постов

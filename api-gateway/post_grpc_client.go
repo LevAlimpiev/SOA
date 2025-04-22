@@ -113,4 +113,38 @@ func ListPosts(ctx context.Context, req ListPostsRequest) (*pb.ListPostsResponse
 	}
 
 	return postClient.ListPosts(ctx, grpcReq)
-} 
+}
+
+// ViewPost регистрирует просмотр поста через gRPC
+func ViewPost(ctx context.Context, postID, userID int32) (*pb.ViewPostResponse, error) {
+	return postClient.ViewPost(ctx, &pb.ViewPostRequest{
+		PostId: postID,
+		UserId: userID,
+	})
+}
+
+// LikePost ставит или убирает лайк поста через gRPC
+func LikePost(ctx context.Context, postID, userID int32) (*pb.LikePostResponse, error) {
+	return postClient.LikePost(ctx, &pb.LikePostRequest{
+		PostId: postID,
+		UserId: userID,
+	})
+}
+
+// AddComment добавляет комментарий к посту через gRPC
+func AddComment(ctx context.Context, postID, userID int32, text string) (*pb.AddCommentResponse, error) {
+	return postClient.AddComment(ctx, &pb.AddCommentRequest{
+		PostId: postID,
+		UserId: userID,
+		Text:   text,
+	})
+}
+
+// GetComments получает комментарии к посту с пагинацией через gRPC
+func GetComments(ctx context.Context, postID int32, page, pageSize int32) (*pb.GetCommentsResponse, error) {
+	return postClient.GetComments(ctx, &pb.GetCommentsRequest{
+		PostId:   postID,
+		Page:     page,
+		PageSize: pageSize,
+	})
+}

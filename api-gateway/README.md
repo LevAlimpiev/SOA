@@ -1,8 +1,12 @@
 # API Gateway
 
-http://localhost:8081
+http://localhost:8090
 
-docker run -p 8090:8080 -e SWAGGER_JSON=/api-gateway/openapi.yml -v $(pwd)/api-gateway/openapi.yml:/api-gateway/openapi.yml swaggerapi/swagger-ui
+
+docker stop $(docker ps -q --filter ancestor=swaggerapi/swagger-ui)
+
+
+docker run -p 8090:8080 -e SWAGGER_URL=/openapi.yml -v $(pwd)/openapi.yml:/usr/share/nginx/html/openapi.yml swaggerapi/swagger-ui
 
 API-шлюз предоставляет единую точку входа для клиентских приложений и перенаправляет запросы на соответствующие микросервисы.
 

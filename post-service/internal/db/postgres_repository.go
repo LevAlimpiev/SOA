@@ -447,3 +447,204 @@ func (r *PostgresPostRepository) List(userID int32, page, pageSize int32, creato
 
 	return result, totalCount, nil
 }
+
+// ViewPost регистрирует просмотр поста
+func (r *PostgresPostRepository) ViewPost(postID, userID int32) error {
+	// Проверяем существование поста
+	var exists bool
+	err := r.db.QueryRow("SELECT EXISTS(SELECT 1 FROM posts WHERE id = $1)", postID).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("ошибка при проверке существования поста: %w", err)
+	}
+	if !exists {
+		return errors.New("пост не найден")
+	}
+
+	// Добавляем запись о просмотре
+	_, err = r.db.Exec(
+		`INSERT INTO post_views (post_id, user_id, viewed_at) 
+         VALUES ($1, $2, NOW())`,
+		postID, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("ошибка при регистрации просмотра: %w", err)
+	}
+
+	return nil
+}
+
+// LikePost добавляет или удаляет лайк поста
+func (r *PostgresPostRepository) LikePost(postID, userID int32) error {
+	// Проверяем существование поста
+	var exists bool
+	err := r.db.QueryRow("SELECT EXISTS(SELECT 1 FROM posts WHERE id = $1)", postID).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("ошибка при проверке существования поста: %w", err)
+	}
+	if !exists {
+		return errors.New("пост не найден")
+	}
+
+	// Начинаем транзакцию
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("ошибка при начале транзакции: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Проверяем, ставил ли пользователь уже лайк этому посту
+	var likeExists bool
+	err = tx.QueryRow(
+		"SELECT EXISTS(SELECT 1 FROM post_likes WHERE post_id = $1 AND user_id = $2)",
+		postID, userID,
+	).Scan(&likeExists)
+	if err != nil {
+		return fmt.Errorf("ошибка при проверке существования лайка: %w", err)
+	}
+
+	if likeExists {
+		// Если лайк уже существует, удаляем его (toggle)
+		_, err = tx.Exec(
+			"DELETE FROM post_likes WHERE post_id = $1 AND user_id = $2",
+			postID, userID,
+		)
+		if err != nil {
+			return fmt.Errorf("ошибка при удалении лайка: %w", err)
+		}
+	} else {
+		// Если лайка нет, добавляем его
+		_, err = tx.Exec(
+			`INSERT INTO post_likes (post_id, user_id, created_at) 
+             VALUES ($1, $2, NOW())`,
+			postID, userID,
+		)
+		if err != nil {
+			return fmt.Errorf("ошибка при добавлении лайка: %w", err)
+		}
+	}
+
+	// Фиксируем транзакцию
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("ошибка при фиксации транзакции: %w", err)
+	}
+
+	return nil
+}
+
+// AddComment добавляет комментарий к посту
+func (r *PostgresPostRepository) AddComment(postID, userID int32, text string) (*pb.Comment, error) {
+	// Проверяем существование поста
+	var exists bool
+	err := r.db.QueryRow("SELECT EXISTS(SELECT 1 FROM posts WHERE id = $1)", postID).Scan(&exists)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка при проверке существования поста: %w", err)
+	}
+	if !exists {
+		return nil, errors.New("пост не найден")
+	}
+
+	// Получаем имя пользователя
+	var username string
+	err = r.db.QueryRow(
+		`SELECT username FROM users WHERE id = $1`,
+		userID,
+	).Scan(&username)
+	if err != nil {
+		// Если не находим пользователя, используем ID в качестве имени
+		username = fmt.Sprintf("user_%d", userID)
+	}
+
+	// Добавляем комментарий
+	var commentID int32
+	var createdAt time.Time
+	err = r.db.QueryRow(
+		`INSERT INTO post_comments (post_id, user_id, text, created_at) 
+         VALUES ($1, $2, $3, NOW()) 
+         RETURNING id, created_at`,
+		postID, userID, text,
+	).Scan(&commentID, &createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка при добавлении комментария: %w", err)
+	}
+
+	return &pb.Comment{
+		Id:        commentID,
+		PostId:    postID,
+		UserId:    userID,
+		Text:      text,
+		CreatedAt: timestamppb.New(createdAt),
+		Username:  username,
+	}, nil
+}
+
+// GetComments возвращает комментарии к посту с пагинацией
+func (r *PostgresPostRepository) GetComments(postID int32, page, pageSize int32) ([]*pb.Comment, int32, error) {
+	// Проверяем существование поста
+	var exists bool
+	err := r.db.QueryRow("SELECT EXISTS(SELECT 1 FROM posts WHERE id = $1)", postID).Scan(&exists)
+	if err != nil {
+		return nil, 0, fmt.Errorf("ошибка при проверке существования поста: %w", err)
+	}
+	if !exists {
+		return nil, 0, errors.New("пост не найден")
+	}
+
+	// Получаем общее количество комментариев
+	var totalCount int32
+	err = r.db.QueryRow(
+		"SELECT COUNT(*) FROM post_comments WHERE post_id = $1",
+		postID,
+	).Scan(&totalCount)
+	if err != nil {
+		return nil, 0, fmt.Errorf("ошибка при получении количества комментариев: %w", err)
+	}
+
+	// Проверяем и корректируем параметры пагинации
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+
+	// Вычисляем смещение
+	offset := (page - 1) * pageSize
+
+	// Запрашиваем комментарии
+	rows, err := r.db.Query(
+		`SELECT c.id, c.post_id, c.user_id, c.text, c.created_at, 
+                COALESCE(u.username, 'user_' || c.user_id) as username
+         FROM post_comments c
+         LEFT JOIN users u ON c.user_id = u.id
+         WHERE c.post_id = $1
+         ORDER BY c.created_at DESC
+         LIMIT $2 OFFSET $3`,
+		postID, pageSize, offset,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf("ошибка при получении комментариев: %w", err)
+	}
+	defer rows.Close()
+
+	// Обрабатываем результаты
+	var comments []*pb.Comment
+	for rows.Next() {
+		var comment pb.Comment
+		var createdAt time.Time
+		err := rows.Scan(
+			&comment.Id,
+			&comment.PostId,
+			&comment.UserId,
+			&comment.Text,
+			&createdAt,
+			&comment.Username,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("ошибка при обработке комментария: %w", err)
+		}
+		comment.CreatedAt = timestamppb.New(createdAt)
+		comments = append(comments, &comment)
+	}
+
+	return comments, totalCount, nil
+}
