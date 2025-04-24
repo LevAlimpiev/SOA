@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/levalimpiev/service_oriented_architectures/post-service/internal/db"
+	"github.com/levalimpiev/service_oriented_architectures/post-service/internal/kafka"
 	"github.com/levalimpiev/service_oriented_architectures/post-service/internal/server"
 	"github.com/levalimpiev/service_oriented_architectures/post-service/internal/service"
 	pb "github.com/levalimpiev/service_oriented_architectures/proto/post"
@@ -18,6 +19,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
+
+// Глобальная переменная для доступа к Kafka Producer
+var kafkaProducer *kafka.KafkaProducer
 
 func main() {
 	// Определяем порт из переменной окружения или используем значение по умолчанию
@@ -33,6 +37,16 @@ func main() {
 	}
 	defer database.Close()
 
+	// Инициализация Kafka Producer
+	kafkaProducer, err = kafka.NewKafkaProducer()
+	if err != nil {
+		log.Printf("Ошибка инициализации Kafka Producer: %v", err)
+		log.Println("Сервис продолжит работу без отправки событий в Kafka")
+	} else {
+		defer kafkaProducer.Close()
+		log.Println("Kafka Producer успешно инициализирован")
+	}
+
 	// Создаем репозиторий для работы с данными постов
 	postRepo := db.NewPostgresPostRepository(database)
 
@@ -42,8 +56,13 @@ func main() {
 	// Инициализируем gRPC сервер
 	grpcServer := grpc.NewServer()
 
+	// Создаем сервер и передаем в него Kafka Producer
+	postServer := server.NewPostServer(postService)
+	// Устанавливаем глобальную переменную для доступа из других частей приложения
+	server.SetKafkaProducer(kafkaProducer)
+
 	// Регистрируем имплементацию сервиса
-	pb.RegisterPostServiceServer(grpcServer, server.NewPostServer(postService))
+	pb.RegisterPostServiceServer(grpcServer, postServer)
 
 	// Включаем reflection для удобства отладки
 	reflection.Register(grpcServer)
@@ -112,4 +131,9 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// GetKafkaProducer возвращает инициализированный экземпляр Kafka Producer
+func GetKafkaProducer() *kafka.KafkaProducer {
+	return kafkaProducer
 }

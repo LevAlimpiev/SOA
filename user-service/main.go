@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/lib/pq"
 
+	"github.com/levalimpiev/service_oriented_architectures/user-service/kafka"
 	"github.com/levalimpiev/service_oriented_architectures/user-service/token"
 )
 
@@ -27,10 +28,14 @@ type User struct {
 	UpdatedAt   time.Time `json:"updated_at,omitempty"`
 }
 
+// Глобальная переменная для доступа к Kafka Producer
+var kafkaProducer *kafka.KafkaProducer
+
 // App структура для хранения зависимостей приложения
 type App struct {
-	db           *sql.DB
-	tokenService token.TokenService
+	db            *sql.DB
+	tokenService  token.TokenService
+	kafkaProducer *kafka.KafkaProducer
 }
 
 // NewApp создает и инициализирует новое приложение
@@ -46,6 +51,18 @@ func NewApp() (*App, error) {
 
 	// Инициализация сервиса токенов
 	app.tokenService = app.initTokenService()
+
+	// Инициализация Kafka Producer
+	app.kafkaProducer, err = kafka.NewKafkaProducer()
+	if err != nil {
+		log.Printf("Ошибка инициализации Kafka Producer: %v", err)
+		log.Println("Сервис продолжит работу без отправки событий в Kafka")
+	} else {
+		log.Println("Kafka Producer успешно инициализирован")
+	}
+
+	// Сохраняем глобальные ссылки
+	kafkaProducer = app.kafkaProducer
 
 	return app, nil
 }
@@ -123,6 +140,16 @@ func main() {
 		log.Fatalf("Failed to initialize application: %v", err)
 	}
 
+	// Важно: закрыть Kafka Producer перед завершением
+	if app.kafkaProducer != nil {
+		defer app.kafkaProducer.Close()
+	}
+
 	// Запуск приложения
 	app.Run()
+}
+
+// GetKafkaProducer возвращает инициализированный экземпляр Kafka Producer
+func GetKafkaProducer() *kafka.KafkaProducer {
+	return kafkaProducer
 }

@@ -103,6 +103,18 @@ func (s *userServiceServer) Register(ctx context.Context, req *pb.RegisterReques
 		return nil, status.Errorf(codes.Internal, "Failed to create user")
 	}
 
+	// Отправка события о регистрации в Kafka
+	producer := GetKafkaProducer()
+	if producer != nil {
+		err := producer.SendUserRegistration(userID, username, email, createdAt)
+		if err != nil {
+			log.Printf("Ошибка отправки события регистрации в Kafka: %v", err)
+			// Не прерываем выполнение, так как это некритичная ошибка
+		} else {
+			log.Printf("Событие о регистрации пользователя ID=%d успешно отправлено в Kafka", userID)
+		}
+	}
+
 	// Generate token
 	token, err := s.tokenService.GenerateToken(userID, username, email)
 	if err != nil {

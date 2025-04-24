@@ -4,11 +4,20 @@ import (
 	"context"
 	"strings"
 
+	"github.com/levalimpiev/service_oriented_architectures/post-service/internal/kafka"
 	"github.com/levalimpiev/service_oriented_architectures/post-service/internal/service"
 	pb "github.com/levalimpiev/service_oriented_architectures/proto/post"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// Глобальный экземпляр Kafka Producer
+var kafkaProducer *kafka.KafkaProducer
+
+// SetKafkaProducer устанавливает глобальный экземпляр Kafka Producer
+func SetKafkaProducer(producer *kafka.KafkaProducer) {
+	kafkaProducer = producer
+}
 
 // PostServer реализует gRPC-сервер для работы с постами
 type PostServer struct {
@@ -233,6 +242,15 @@ func (s *PostServer) ViewPost(ctx context.Context, req *pb.ViewPostRequest) (*pb
 		}, status.Error(errCode, err.Error())
 	}
 
+	// Отправляем событие просмотра в Kafka
+	if kafkaProducer != nil {
+		if err := kafkaProducer.SendPostView(req.PostId, req.UserId); err != nil {
+			// Логируем ошибку, но не прерываем выполнение
+			// так как это некритичная ошибка для основной функциональности
+			status.Errorf(codes.Internal, "ошибка отправки события в Kafka: %v", err)
+		}
+	}
+
 	return &pb.ViewPostResponse{
 		Success: true,
 	}, nil
@@ -269,6 +287,14 @@ func (s *PostServer) LikePost(ctx context.Context, req *pb.LikePostRequest) (*pb
 			Success: false,
 			Error:   err.Error(),
 		}, status.Error(errCode, err.Error())
+	}
+
+	// Отправляем событие лайка в Kafka
+	if kafkaProducer != nil {
+		if err := kafkaProducer.SendPostLike(req.PostId, req.UserId); err != nil {
+			// Логируем ошибку, но не прерываем выполнение
+			status.Errorf(codes.Internal, "ошибка отправки события в Kafka: %v", err)
+		}
 	}
 
 	return &pb.LikePostResponse{
@@ -312,6 +338,14 @@ func (s *PostServer) AddComment(ctx context.Context, req *pb.AddCommentRequest) 
 			Success: false,
 			Error:   err.Error(),
 		}, status.Error(errCode, err.Error())
+	}
+
+	// Отправляем событие комментария в Kafka
+	if kafkaProducer != nil {
+		if err := kafkaProducer.SendPostComment(req.PostId, req.UserId, comment.Id); err != nil {
+			// Логируем ошибку, но не прерываем выполнение
+			status.Errorf(codes.Internal, "ошибка отправки события в Kafka: %v", err)
+		}
 	}
 
 	return &pb.AddCommentResponse{
