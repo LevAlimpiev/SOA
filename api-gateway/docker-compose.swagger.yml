@@ -1,0 +1,15 @@
+version: '3'
+
+services:
+  swagger-ui:
+    image: swaggerapi/swagger-ui
+    container_name: swagger-ui
+    ports:
+      - "8090:8080"
+    volumes:
+      - ./openapi.yml:/swagger.json
+    environment:
+      - SWAGGER_JSON=/swagger.json
+      - BASE_URL=/
+      - CONFIG_URL=/swagger.json
+      - SWAGGER_UI_DISABLE_INIT=true 
