@@ -1,3 +1,6 @@
+Поправить метод like, чтобы он отправлял json
+
+
 # Реализация отправки событий в Kafka
 
 В рамках данного задания реализована отправка событий в Apache Kafka для следующих действий:
@@ -64,9 +67,7 @@
 
 3. Создайте нового пользователя (событие регистрации):
    ```bash
-   curl -X POST http://localhost:8080/auth/register \
-     -H "Content-Type: application/json" \
-     -d '{"username":"test_user","email":"test@example.com","password":"password123"}'
+   curl -X POST http://localhost:8080/api/register -H "Content-Type: application/json" -d '{"username":"test_user24","email":"test24@example.com","password":"password123"}'
    ```
 
 4. Создайте новый пост:
@@ -96,15 +97,15 @@
 
 7. Добавьте комментарий (событие комментария):
    ```bash
-   curl -X POST http://localhost:8080/posts/1/comments \
+   curl -X POST http://localhost:8080/api/posts/1/comments \
      -H "Content-Type: application/json" \
-     -H "Authorization: Bearer <token>" \
+     -H "Authorization: Bearer %TOKEN" \
      -d '{"text": "Тестовый комментарий для проверки Kafka"}'
    ```
 
 8. В Kafka UI вы должны увидеть соответствующие сообщения в топиках:
    - `user_registration` - событие регистрации пользователя
-   - `post_view` - событие просмотра поста 
+   - `post_view` - событие просмотра поста
    - `post_like` - событие лайка поста
    - `post_comment` - событие комментария к посту
 
@@ -129,4 +130,4 @@
 
 - При ошибке отправки события в Kafka работа основной функциональности не прерывается
 - Все события содержат timestamp и идентификаторы для корректного отслеживания
-- Kafka UI доступен по адресу http://localhost:8090 
+- Kafka UI доступен по адресу http://localhost:8090

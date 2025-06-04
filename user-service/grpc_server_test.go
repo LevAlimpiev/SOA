@@ -187,6 +187,9 @@ func TestLoginRPC(t *testing.T) {
 	// Заменяем глобальную переменную db на мок
 	db = mockDB
 
+	// Инициализируем сервис токенов для тестов
+	tokenService = token.NewSimpleTokenService(24)
+
 	// Создаем сервер с нужными зависимостями
 	server := &userServiceServer{
 		db:           db,
@@ -236,6 +239,9 @@ func TestLoginRPC_InvalidPassword(t *testing.T) {
 
 	// Заменяем глобальную переменную db на мок
 	db = mockDB
+
+	// Инициализируем сервис токенов для тестов
+	tokenService = token.NewSimpleTokenService(24)
 
 	// Создаем сервер с нужными зависимостями
 	server := &userServiceServer{
@@ -287,6 +293,9 @@ func TestLoginRPC_UserNotFound(t *testing.T) {
 
 	// Заменяем глобальную переменную db на мок
 	db = mockDB
+
+	// Инициализируем сервис токенов для тестов
+	tokenService = token.NewSimpleTokenService(24)
 
 	// Создаем сервер с нужными зависимостями
 	server := &userServiceServer{
